@@ -1,0 +1,43 @@
+[project]
+name = "corespine"
+version = "0.0.1"
+description = "Spine 家族的薄共享核:domain-neutral 底层原语(缝注册表 / observability / LLM 缝 / config / queue / conformance 基座)。"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "lin han" }]
+keywords = [
+    "seam",
+    "registry",
+    "conformance",
+    "observability",
+    "llm-provider",
+    "task-queue",
+    "framework-free",
+    "offline",
+]
+# 注:license 用 SPDX 表达式(PEP 639),故【不】再加 "License ::" 分类器(避免与 twine 冲突)。
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+# 薄核宪章(ADR 0001 D5):默认路径零重依赖,只用标准库。真实后端的 SDK 由各 app
+# 在自己的缝里经可选 extra 延迟 import,核心不背任何运行时三方依赖。
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/corespine"]

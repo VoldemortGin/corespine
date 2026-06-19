@@ -60,9 +60,7 @@ class CaseResult:
 class ConformanceSuite(Generic[T]):
     """把 实现注册表 × 不变量包 绑成可执行 / 可参数化的 conformance 套件。"""
 
-    def __init__(
-        self, implementations: dict[str, Factory[T]], pack: InvariantPack[T]
-    ) -> None:
+    def __init__(self, implementations: dict[str, Factory[T]], pack: InvariantPack[T]) -> None:
         if not implementations:
             raise ValueError("conformance 套件至少需要一个实现")
         self._impls = dict(implementations)
@@ -70,9 +68,7 @@ class ConformanceSuite(Generic[T]):
 
     def cases(self) -> list[tuple[str, str]]:
         """全部 (实现名, 不变量名) 组合——可直接喂给 pytest.mark.parametrize。"""
-        return [
-            (impl, inv) for impl in self._impls for inv in self._pack.names()
-        ]
+        return [(impl, inv) for impl in self._impls for inv in self._pack.names()]
 
     def ids(self) -> list[str]:
         """与 cases() 对齐的可读用例 id(形如 impl/invariant)。"""
@@ -94,9 +90,7 @@ class ConformanceSuite(Generic[T]):
                 self.check(impl, inv)
                 results.append(CaseResult(impl, inv, True))
             except Exception as exc:  # noqa: BLE001 — 收集失败,不中断其余格子
-                results.append(
-                    CaseResult(impl, inv, False, f"{type(exc).__name__}: {exc}")
-                )
+                results.append(CaseResult(impl, inv, False, f"{type(exc).__name__}: {exc}"))
         return results
 
     def passed(self) -> bool:

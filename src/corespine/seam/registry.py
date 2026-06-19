@@ -85,9 +85,7 @@ class Registry(Generic[T]):
             return ep.load()(**kwargs)
         raise ValueError(self._unknown_message(spec, discovered))
 
-    def _unknown_message(
-        self, spec: str, discovered: dict[str, metadata.EntryPoint]
-    ) -> str:
+    def _unknown_message(self, spec: str, discovered: dict[str, metadata.EntryPoint]) -> str:
         available = sorted(set(self._factories) | set(discovered))
         listed = ", ".join(available) if available else "(无)"
         return (

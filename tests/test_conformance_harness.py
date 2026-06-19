@@ -9,7 +9,6 @@ import pytest
 
 from corespine.conformance.harness import ConformanceSuite, InvariantPack
 
-
 # --- TOY 缝:两个正确实现 -------------------------------------------------
 
 

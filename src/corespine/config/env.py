@@ -56,9 +56,7 @@ def _coerce(raw: str, tp: object) -> object:
     return raw
 
 
-def load_from_env(
-    cls: type[T], *, prefix: str, env: Mapping[str, str] | None = None
-) -> T:
+def load_from_env(cls: type[T], *, prefix: str, env: Mapping[str, str] | None = None) -> T:
     """按 dataclass 字段从 PREFIX_* 读取并构造实例(缺失则用字段默认值)。
 
     env 可注入(默认读 os.environ);get_type_hints 解析注解,故 `from __future__
@@ -73,10 +71,7 @@ def load_from_env(
         key = env_key(prefix, f.name)
         if key in source:
             kwargs[f.name] = _coerce(source[key], hints.get(f.name, f.type))
-        elif (
-            f.default is dataclasses.MISSING
-            and f.default_factory is dataclasses.MISSING
-        ):
+        elif f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING:
             raise ValueError(f"缺少必填配置 {key}(字段 {f.name!r} 无默认值)")
         # 否则:留空,交给 dataclass 自身的默认值。
     return cls(**kwargs)

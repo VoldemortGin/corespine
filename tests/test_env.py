@@ -40,8 +40,10 @@ def test_reads_and_coerces_types():
     assert cfg.db_path == "data/x.db"
 
 
-@pytest.mark.parametrize("raw,expected", [("1", True), ("yes", True), ("ON", True),
-                                          ("0", False), ("no", False), ("off", False)])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("1", True), ("yes", True), ("ON", True), ("0", False), ("no", False), ("off", False)],
+)
 def test_bool_parsing(raw, expected):
     cfg = load_from_env(DemoConfig, prefix="DEMO", env={"DEMO_DEBUG": raw})
     assert cfg.debug is expected

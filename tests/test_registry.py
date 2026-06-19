@@ -54,9 +54,7 @@ def test_unknown_spec_lists_available_names():
 
 def test_lazy_extra_import_friendly_message():
     with pytest.raises(ImportError) as ei:
-        lazy_extra_import(
-            "corespine_definitely_missing_dep_xyz", pkg="corespine", extra="toy"
-        )
+        lazy_extra_import("corespine_definitely_missing_dep_xyz", pkg="corespine", extra="toy")
     assert "pip install corespine[toy]" in str(ei.value)
 
 

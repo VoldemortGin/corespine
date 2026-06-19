@@ -1,0 +1,14 @@
+# 收窄构建上下文(上下文为仓库根)。Dockerfile 用显式 COPY,故镜像内容不依赖本文件;
+# 这里仅为减小上下文传输、加速构建。
+.git/
+.github/
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+deploy/

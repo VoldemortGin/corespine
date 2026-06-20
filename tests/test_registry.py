@@ -39,6 +39,18 @@ def test_discovers_entry_point(monkeypatch):
     assert "plugin_impl" in r.names()
 
 
+def test_builtin_takes_precedence_over_entry_point(monkeypatch):
+    r: Registry = Registry("toy")
+    r.register("plugin_impl", lambda **kw: {"kind": "builtin", **kw})
+
+    def fake_entry_points(*, group):
+        return [_FakeEntryPoint()] if group == "corespine.toy" else []
+
+    monkeypatch.setattr(reg_mod.metadata, "entry_points", fake_entry_points)
+    # 同名时内置优先:命中内置即返回,根本不触发 entry-point 加载。
+    assert r.make("plugin_impl")["kind"] == "builtin"
+
+
 def test_unknown_spec_lists_available_names():
     r: Registry = Registry("vector_store")
     r.register("memory", lambda **kw: object())

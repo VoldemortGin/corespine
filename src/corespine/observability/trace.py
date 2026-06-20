@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from corespine.errors import CorespineError
+
 # 禁止出现在 trace 载荷里的键(承载受限正文 / 取值的字段名,归一为小写后比对)。
 # 命中任一即拒绝整条 trace——宁可报错,也不让正文流进可观测链路。
 FORBIDDEN_KEYS = frozenset(
@@ -34,8 +36,13 @@ FORBIDDEN_KEYS = frozenset(
 )
 
 
-class TraceError(ValueError):
-    """trace 载荷违反隐私约定(携带受限正文 / 取值字段)时抛出。"""
+class TraceError(CorespineError):
+    """trace 载荷违反隐私约定(携带受限正文 / 取值字段)时抛出。
+
+    继承家族统一基类 CorespineError,带稳定可 grep 的 code,便于跨缝统一捕获 / 归一。
+    """
+
+    code = "trace.forbidden"
 
 
 @dataclass(frozen=True)

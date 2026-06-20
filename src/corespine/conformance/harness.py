@@ -74,6 +74,29 @@ class ConformanceSuite(Generic[T]):
         """与 cases() 对齐的可读用例 id(形如 impl/invariant)。"""
         return [f"{impl}/{inv}" for impl, inv in self.cases()]
 
+    def parametrize_kwargs(self) -> dict[str, object]:
+        """产出可直接喂给 pytest.mark.parametrize(**...) 的 kwargs(pytest-free)。
+
+        本方法【只返回纯数据】(str / list[Callable] / list[str]),core 不 import
+        pytest——pytest 依赖留在消费者的测试里。返回三键:
+
+        - argnames: 固定为 "case"(单形参,值是一个【已绑定好该格子的零参 thunk】);
+        - argvalues: 每格一个 thunk,调用即跑 check(impl, inv)——满足则静默返回,违反则
+          原样抛出(通常是 AssertionError);
+        - ids: 与 argvalues 对齐的可读用例 id,形如 "impl-inv"。
+
+        这样消费者的整套 glue 收敛成两行,无需手写 cases() 遍历或 fixture(params=...):
+
+            @pytest.mark.parametrize(**suite.parametrize_kwargs())
+            def test_conformance(case):
+                case()
+        """
+        argvalues: list[Callable[[], None]] = [
+            (lambda impl=impl, inv=inv: self.check(impl, inv)) for impl, inv in self.cases()
+        ]
+        ids = [f"{impl}-{inv}" for impl, inv in self.cases()]
+        return {"argnames": "case", "argvalues": argvalues, "ids": ids}
+
     def check(self, impl: str, invariant: str) -> None:
         """跑单个格子:新建该实现实例,对其执行该不变量(失败则原样抛出)。
 

@@ -7,6 +7,7 @@ env 配置 / 任务队列 / conformance 基座。刻意保持极小,按证据(ru
 
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
+from corespine.errors import ConfigError, CorespineError, SeamError, error_to_dict
 from corespine.llm.provider import Completion, LLMProvider, MockProvider
 from corespine.observability.trace import (
     FORBIDDEN_KEYS,
@@ -45,5 +46,10 @@ __all__ = [
     "ConformanceSuite",
     "InvariantPack",
     "CaseResult",
+    # errors
+    "CorespineError",
+    "error_to_dict",
+    "ConfigError",
+    "SeamError",
     "__version__",
 ]

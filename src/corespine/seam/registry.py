@@ -19,7 +19,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from importlib import metadata
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -82,7 +82,9 @@ class Registry(Generic[T]):
         discovered = self._discover()
         ep = discovered.get(key)
         if ep is not None:
-            return ep.load()(**kwargs)
+            # entry-point 的 load() 返回 Any;约定它给出本缝的工厂,cast 回 Factory[T]。
+            factory = cast("Factory[T]", ep.load())
+            return factory(**kwargs)
         raise ValueError(self._unknown_message(spec, discovered))
 
     def _unknown_message(self, spec: str, discovered: dict[str, metadata.EntryPoint]) -> str:

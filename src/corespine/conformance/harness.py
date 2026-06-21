@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
@@ -91,8 +92,9 @@ class ConformanceSuite(Generic[T]):
             def test_conformance(case):
                 case()
         """
+        # partial 立即绑定 impl/inv(规避 lambda 闭包晚绑定),且类型明确(mypy --strict 友好)。
         argvalues: list[Callable[[], None]] = [
-            (lambda impl=impl, inv=inv: self.check(impl, inv)) for impl, inv in self.cases()
+            partial(self.check, impl, inv) for impl, inv in self.cases()
         ]
         ids = [f"{impl}-{inv}" for impl, inv in self.cases()]
         return {"argnames": "case", "argvalues": argvalues, "ids": ids}

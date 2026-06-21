@@ -1,6 +1,5 @@
 [project]
-# PyPI 分发名 hancore(han 家族品牌);import 包名仍为 corespine(同 scikit-learn→sklearn 惯例)。
-name = "hancore"
+name = "corespine"
 version = "0.0.1"
 description = "Spine 家族的薄共享核:domain-neutral 底层原语(缝注册表 / observability / LLM 缝 / config / queue / conformance 基座)。"
 readme = "README.md"

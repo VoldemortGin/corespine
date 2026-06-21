@@ -35,13 +35,13 @@ VIRTUAL_ENV="$(pwd)/.venv" uv pip install -e ".[dev]"
 ## 30 秒上手
 
 ```python
-from corespine import Registry, MockProvider, InProcessPrivacyTraceSink, FakeQueue
+from corespine import Registry, MockProvider, Message, InProcessPrivacyTraceSink, FakeQueue
 
 # 缝:一个 spec 选实现(大小写/留白不敏感;找不到列清可用名;还能 entry-point 自动发现)
 reg: Registry = Registry("llm")
 reg.register("mock", lambda **kw: MockProvider(**kw))
 provider = reg.make("  MOCK ")
-print(provider.complete("hello").text)   # 确定性,可复现
+print(provider.chat([Message("user", "hello")]).text)   # chat/messages 形状,确定性可复现
 
 # 隐私 trace:只记元数据;塞正文会被直接拒绝(raise TraceError)
 sink = InProcessPrivacyTraceSink()

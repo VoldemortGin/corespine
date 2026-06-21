@@ -8,7 +8,7 @@ env 配置 / 任务队列 / conformance 基座。刻意保持极小,按证据(ru
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
 from corespine.errors import ConfigError, CorespineError, SeamError, error_to_dict
-from corespine.llm.provider import Completion, LLMProvider, MockProvider
+from corespine.llm.provider import ChatResult, LLMProvider, Message, MockProvider, ToolCall
 from corespine.observability.trace import (
     FORBIDDEN_KEYS,
     InProcessPrivacyTraceSink,
@@ -33,7 +33,9 @@ __all__ = [
     "FORBIDDEN_KEYS",
     # llm
     "LLMProvider",
-    "Completion",
+    "Message",
+    "ToolCall",
+    "ChatResult",
     "MockProvider",
     # config
     "load_from_env",

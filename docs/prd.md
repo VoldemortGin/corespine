@@ -13,7 +13,7 @@
 |---|---|---|---|
 | seam/registry | `Registry` / `lazy_extra_import` | 内置注册 + entry-point 发现 | ✅ |
 | observability/trace | `TraceSink` / `TraceEvent` / `TraceError` / `FORBIDDEN_KEYS` | `InProcessPrivacyTraceSink`(拒正文) | ✅ |
-| llm/provider | `LLMProvider` / `Completion` | `MockProvider`(确定性) | ✅ |
+| llm/provider | `LLMProvider`(chat/messages,带 tools/tool_calls)/ `Message` / `ToolCall` / `ChatResult` | `MockProvider`(确定性) | ✅ |
 | config/env | `load_from_env` / `env_key` | env→frozen dataclass(含 `X\|None`) | ✅ |
 | queue/task_queue | `TaskQueue` / `JobStatus` | `FakeQueue`(同步内联) | ✅ |
 | conformance/harness | `ConformanceSuite` / `InvariantPack` / `CaseResult` + `parametrize_kwargs` | 实现×不变量笛卡尔积 | ✅ |

@@ -8,7 +8,16 @@ env 配置 / 任务队列 / conformance 基座。刻意保持极小,按证据(ru
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
 from corespine.errors import ConfigError, CorespineError, SeamError, error_to_dict
-from corespine.llm.provider import ChatResult, LLMProvider, Message, MockProvider, ToolCall
+from corespine.llm.provider import (
+    ChatCompletion,
+    Choice,
+    FunctionCall,
+    LLMProvider,
+    MockProvider,
+    ResponseMessage,
+    ToolCall,
+    Usage,
+)
 from corespine.observability.trace import (
     FORBIDDEN_KEYS,
     InProcessPrivacyTraceSink,
@@ -31,12 +40,15 @@ __all__ = [
     "TraceError",
     "InProcessPrivacyTraceSink",
     "FORBIDDEN_KEYS",
-    # llm
+    # llm(OpenAI chat-completions 规范)
     "LLMProvider",
-    "Message",
-    "ToolCall",
-    "ChatResult",
     "MockProvider",
+    "ChatCompletion",
+    "Choice",
+    "ResponseMessage",
+    "ToolCall",
+    "FunctionCall",
+    "Usage",
     # config
     "load_from_env",
     "env_key",

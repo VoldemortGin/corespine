@@ -5,6 +5,8 @@ Spine 家族的**薄共享核**(见 [ADR 0001](../docs/adr/0001-spine-family-bou
 `agentspine` 兄弟包各自依赖,**不**含任何它们的领域概念。
 
 > 刻意地薄。按证据(rule of three)增长,不预先造框架。详见 [`CLAUDE.md`](CLAUDE.md) 宪章。
+>
+> **🤖 给 AI / LLM:** 用本库前先读 [`llms.txt`](llms.txt)(精简索引)与 [`docs/llms/`](docs/llms/)(完整 API / recipes / 陷阱);`pip install` 后这些文档随包位于 `site-packages/corespine/_llms/`。
 
 ## 缝的元模式
 

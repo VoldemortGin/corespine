@@ -1,0 +1,48 @@
+# corespine
+
+> Spine 家族的【薄】共享核(ADR 0001 D3/D5):一组 **domain-neutral 的底层原语**——既不属于
+> RAG、也不属于 agent 的稳定地基。六条「缝」(seam),每条 = **Protocol + 离线确定性默认实现
+> + 工厂/Registry + 参数化 conformance**。核心 import **零 SDK、零网络、零运行时三方依赖**,
+> 离线即可端到端跑。被 `ragspine` / `agentspine` 各自依赖,**不**反向依赖它们,也**不**含任何
+> 它们的领域概念。本文件为 AI/LLM 消费者写,所有 API、签名、示例输出均经真实运行核对。
+
+- pip 安装名:`corespine`(`pip install corespine`)
+- import 名:`import corespine`
+- Python:>= 3.10 · 依赖:**无**(核心 `dependencies` 恒空)· 版本:0.0.1
+
+## 文档地图(docs/llms/)
+
+- [overview.md](docs/llms/overview.md) —— 是什么、解决什么、何时用 / 不用;六条缝的核心概念与
+  统一元模式(Protocol + 默认实现 + 工厂 + conformance)。**先读这篇建立心智模型。**
+- [api.md](docs/llms/api.md) —— 完整公开 API 参考:`__all__` 每个导出的【真实签名】+ 契约 +
+  一句话说明,按缝分节。**写代码时查这篇。**
+- [recipes.md](docs/llms/recipes.md) —— 可运行最小示例(全部离线 / 零网络,逐个实跑过并附真实
+  输出):Registry 选实现、隐私 trace、`MockProvider.chat`、`load_from_env`、`FakeQueue`、
+  `ConformanceSuite` + `parametrize_kwargs`、errors 归一。**照抄改写时用这篇。**
+- [gotchas.md](docs/llms/gotchas.md) —— 易错点:LLM 缝是 `chat` 不是 `complete`、TraceSink 拒
+  正文字段、Registry 名称归一、`lazy_extra_import`、核心 `dependencies` 恒空。**别踩坑读这篇。**
+
+## 30 秒 hello-world(离线、可直接运行)
+
+```python
+from corespine import Registry, MockProvider, InProcessPrivacyTraceSink, FakeQueue
+
+# 1) 缝:一个 spec 字符串选实现(大小写 / 留白 / 连字符不敏感;找不到会列清可用名)
+reg: Registry = Registry("llm")
+reg.register("mock", lambda **kw: MockProvider(**kw))
+provider = reg.make("  MOCK ")
+
+# 2) LLM 缝是 OpenAI chat-completions 规范:chat(messages) -> ChatCompletion(确定性可复现)
+out = provider.chat([{"role": "user", "content": "hello"}])
+print(out.choices[0].message.content)        # [mock:....] hello
+
+# 3) 隐私 trace:只记元数据(code/计数/耗时);塞正文(content/answer/...)会 raise TraceError
+sink = InProcessPrivacyTraceSink()
+sink.emit("retrieve", count=3, took_ms=12)
+print(sink.codes())                           # ['retrieve']
+
+# 4) 任务队列:同步内联执行,失败记进状态(不外抛)
+q = FakeQueue()
+jid = q.enqueue(lambda payload: {"doubled": payload["n"] * 2}, {"n": 21})
+print(q.get(jid).result)                      # {'doubled': 42}
+```

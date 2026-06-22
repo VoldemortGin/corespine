@@ -14,6 +14,7 @@
 | seam/registry | `Registry` / `lazy_extra_import` | 内置注册 + entry-point 发现 | ✅ |
 | observability/trace | `TraceSink` / `TraceEvent` / `TraceError` / `FORBIDDEN_KEYS` | `InProcessPrivacyTraceSink`(拒正文) | ✅ |
 | llm/provider | `LLMProvider.chat`(OpenAI chat-completions 规范:messages+tools 进、`ChatCompletion` 出) | `MockProvider`(确定性,OpenAI 形状) | ✅ |
+| llm/rate_limit | `RateLimitedProvider`(包装任意 LLMProvider,每分钟 token 上限,超限阻塞等待) | 纯标准库滑动窗口(threading + deque,事后按 usage 累计) | ✅ |
 | config/env | `load_from_env` / `env_key` | env→frozen dataclass(含 `X\|None`) | ✅ |
 | queue/task_queue | `TaskQueue` / `JobStatus` | `FakeQueue`(同步内联) | ✅ |
 | conformance/harness | `ConformanceSuite` / `InvariantPack` / `CaseResult` + `parametrize_kwargs` | 实现×不变量笛卡尔积 | ✅ |
@@ -21,8 +22,14 @@
 
 测试覆盖含:解析归一、entry-point 发现、**内置优先于 entry-point**、未知名报错、缺 extra 友好提示、
 trace 拒正文、Mock 确定性、env 类型转换 / 可选 / 缺失校验、queue 终态 / 幂等、conformance 笛卡尔积、
-errors 基类 code / retryable / 归一 dict。`TraceError` 已改继承 `CorespineError`(code=`trace.forbidden`),
-家族异常统一基类。
+errors 基类 code / retryable / 归一 dict、rate limit 滑动窗口 / 超限阻塞 / token 累计 / 线程安全
+(全部用离线 `MockProvider` / 本地 fake provider,**零真实 API 调用、零网络、零 key**)。`TraceError`
+已改继承 `CorespineError`(code=`trace.forbidden`),家族异常统一基类。
+
+> **新增 llm/rate_limit 的证据(rule of three):** ragspine + spineagent 两消费者都需对 LLM 调用限流,
+> 且 openai / anthropic SDK 只有被动重试(撞 429 退避)、无主动 TPM 节流——满足"≥2 消费者重复同一
+> 稳定面"。限流是 domain-neutral 通用机制(不属 RAG/agent)、纯标准库可实现(符合零依赖宪章),故提上
+> 核心,provider-agnostic 包装任意 LLMProvider;超限【阻塞等待】平滑限速,与 SDK 的 max_retries 互补。
 
 ## 待做 backlog
 

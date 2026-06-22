@@ -5,6 +5,9 @@ env 配置 / 任务队列 / conformance 基座。刻意保持极小,按证据(ru
 绝不放任何 RAG- 或 agent-特定的东西。详见 CLAUDE.md 宪章与 docs/adr/0001。
 """
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
 from corespine.errors import ConfigError, CorespineError, SeamError, error_to_dict
@@ -18,6 +21,7 @@ from corespine.llm.provider import (
     ToolCall,
     Usage,
 )
+from corespine.llm.rate_limit import RateLimitedProvider
 from corespine.observability.trace import (
     FORBIDDEN_KEYS,
     InProcessPrivacyTraceSink,
@@ -28,7 +32,10 @@ from corespine.observability.trace import (
 from corespine.queue.task_queue import FakeQueue, JobStatus, TaskQueue
 from corespine.seam.registry import Registry, lazy_extra_import
 
-__version__ = "0.0.1"
+try:
+    __version__ = _pkg_version("corespine")
+except PackageNotFoundError:  # 纯源码 / 未安装场景
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     # seam
@@ -49,6 +56,7 @@ __all__ = [
     "ToolCall",
     "FunctionCall",
     "Usage",
+    "RateLimitedProvider",
     # config
     "load_from_env",
     "env_key",

@@ -12,6 +12,7 @@ corespine 只提供**机制**,扩展点全在缝上,三种方式互不耦合:
 | entry-point 扩展一条缝 | 第三方装包即被 `make` 发现,无需改核心 | `Registry.make` / group `corespine.<seam>` | [一](#一用-entry-point-扩展一条缝) |
 | 可选 extra + 延迟 import | 真实后端 SDK 只在选用时才 import,缺依赖给友好提示 | `lazy_extra_import` / `[project.optional-dependencies]` | [二](#二可选-extra-命名约定) |
 | 给一条缝绑 conformance 不变量 | app 用自己的不变量逮住坏实现 | `InvariantPack` / `ConformanceSuite` | [三](#三给一条缝绑-conformance-不变量) |
+| 用 trace 缝做可观测 + 接导出后端 | 步骤发非敏感元数据;导出(OTel 等)走 app/contrib 侧 | `TraceSink` / `InProcessPrivacyTraceSink` / `FORBIDDEN_KEYS` | [四](#四用-trace-缝做可观测) |
 
 ## 一、用 entry-point 扩展一条缝
 
@@ -143,3 +144,79 @@ for impl, invariant in suite.cases():
   `ids()` 给对齐的可读 id(形如 `impl/invariant`);
 - 这正是"敢放手让第三方填广度、却让脊柱不变量烂不掉"的落点:没过 conformance 的实现直接
   CI 红,而非生产事故。
+
+## 四、用 trace 缝做可观测
+
+trace 缝(机制源码 [`observability/trace.py`](../src/corespine/observability/trace.py))只给三样
+**机制**:`TraceSink` 协议(出口的最小结构面 `emit(code, **fields)`)、`InProcessPrivacyTraceSink`
+默认实现(隐私 by construction:载荷命中 `FORBIDDEN_KEYS` 即抛 `TraceError`、绝不记录)、以及
+`FORBIDDEN_KEYS` 这份禁词键集合。**具体记什么 code、绑什么不变量,由各 app 自己定**。
+
+家族里已有**两个真实消费形态**,完整可跑范例见
+[`../examples/trace_seam_usage.py`](../examples/trace_seam_usage.py):
+
+### 形态 1:隐私闸门(把默认 sink 包成自家薄封装)
+
+把 `InProcessPrivacyTraceSink` 当作落盘前的强制隐私闸门:每条 trace 先过禁词键校验,过闸后才
+落自家渠道(日志 / DB)。命中正文字段即抛,正文绝不外泄。
+
+```python
+from corespine import InProcessPrivacyTraceSink, TraceError
+
+class PrivacyGatedTrace:
+    def __init__(self) -> None:
+        self._gate = InProcessPrivacyTraceSink()
+
+    def emit_trace(self, code: str, **fields: object) -> None:
+        self._gate.emit(code, **fields)   # 命中 FORBIDDEN_KEYS 直接抛,不落下游
+        ...                               # 过闸后才落自家日志 / DB
+```
+
+### 形态 2:注入点(以 `TraceSink` 形参接收任意 sink)
+
+让步骤/方法以 `trace: TraceSink | None` 形参接收 sink,关键处只 `emit(code, **非敏感字段)`;
+**塞哪个 sink 由 host 决定**。注意只发**长度 / 计数 / 耗时 / 标志**,绝不发正文。
+
+```python
+from corespine import TraceSink
+
+def run_step(task: str, *, trace: TraceSink | None = None) -> str:
+    output = do_work(task)
+    if trace is not None:
+        trace.emit("step", task_chars=len(task), output_chars=len(output))  # 只发长度
+    return output
+```
+
+### 接真实导出后端(OTel 等):一律走 app/contrib 侧
+
+要把 trace 导出到外部系统(OpenTelemetry span / metric、日志聚合……),就**自己实现一个
+`TraceSink`**(鸭子类型即可),其后端 SDK 由你的包经[**可选 extra**](#二可选-extra-命名约定) +
+`lazy_extra_import` 延迟 import。
+
+> **铁律(ADR 0001 D5 / 宪章):** corespine 的 `dependencies` **永远为空**,核心**绝不** import
+> 任何导出后端 SDK(OTel / 日志聚合 / APM)。真实导出 sink 只在**各 app 的可选 extra 或 contrib**
+> 里实现,核心默认路径恒为离线确定性的 `InProcessPrivacyTraceSink`。导出 sink 自己也**仍要守隐私
+> 约定**——最省心的做法是复用 `FORBIDDEN_KEYS` 做同一套禁词键校验。
+
+```python
+from corespine import FORBIDDEN_KEYS, TraceError, lazy_extra_import
+
+class OTelTraceSink:                       # 在【你的包】里,不在 corespine 核心
+    def __init__(self) -> None:
+        # OTel SDK 经你自己的可选 extra 声明,延迟到真正构造时才 import。
+        self._otel = lazy_extra_import("opentelemetry.trace", pkg="myadapter", extra="otel")
+        ...
+    def emit(self, code: str, **fields: object) -> None:
+        offending = sorted(k for k in fields if k.strip().lower() in FORBIDDEN_KEYS)
+        if offending:                      # 导出 sink 自己也守隐私约定
+            raise TraceError(f"导出 sink 拒绝受限字段 {offending}")
+        ...                                # 建 span / 记 metric
+
+# host 把它塞进形态 2 的注入点:run_step(task, trace=OTelTraceSink())
+```
+
+要点:
+
+- trace 只发**非敏感元数据**(code / 计数 / 耗时 / 标志);禁词键集合见 `FORBIDDEN_KEYS`;
+- 默认 sink 离线确定性、零依赖;**真实导出后端永远在 app/contrib 侧,核心不依赖任何 SDK**;
+- 任何导出 sink 都应过同一套隐私校验,**让"不泄漏正文"成为构造保证、而非靠 reviewer 自觉**。

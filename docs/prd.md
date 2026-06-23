@@ -42,6 +42,7 @@ A 类已全部落地(✅),示例 / 文档见 `examples/` 与 `docs/`:
 | A1 | entry-point 端到端示例 | 一个"第三方装包即扩展"的最小可跑 demo + 文档(`pyproject` entry-points → `Registry.make` 发现) | example / 文档 | ✅ |
 | A2 | 可选 extra 范式文档 | 把 `[redis]`/`[openai]` 等 extra 命名约定 + `lazy_extra_import` 用法写成一页 | 文档 | ✅ |
 | A3 | conformance 使用范例 | 展示 app 如何用 `InvariantPack` 给某缝绑自己的不变量(机制示范,不含具体业务不变量) | example / 文档 | ✅ |
+| A4 | trace 缝使用范例 | 展示两个真实消费形态(ragspine 隐私闸门 / spineagent `TraceSink` 注入点)+ 接真实导出后端(OTel)走 app/contrib 侧的形状(范例用纯标准库假 exporter 站位) | example / 文档 | ✅ |
 
 ### B. 待证据(rule of three:≥2 个真实消费者重复同一稳定面才动)
 
@@ -51,13 +52,22 @@ A 类已全部落地(✅),示例 / 文档见 `examples/` 与 `docs/`:
 
 | # | 项 | 触发条件 | 落点 | 状态 |
 |---|---|---|---|---|
-| B1 | trace 真实 sink(OTel 等) | ≥2 app 需要导出 trace | 可选 extra / contrib,**不进核心默认路径** | 待证据 |
+| B1 | trace 真实 sink(OTel 等) | ≥2 app 需要**导出** trace | 可选 extra / contrib,**不进核心默认路径** | 待证据(见下注) |
 | B2 | llm streaming / 批量 / token 计量 | ≥2 app 在缝上重复同一形状 | 先扩 Protocol(最小),实现走 extra | 待证据 |
 | B3 | queue 真实后端 adapter(RQ/Celery)+ 重试/延迟 | ≥2 app 接同一类后端 | adapter 走 extra/contrib;协议扩不扩看证据 | 待证据 |
 | B4 | conformance × pytest 集成助手 | ragspine + agentspine 都在重复 `cases()`→`parametrize` 胶水 | `harness.parametrize_kwargs`(纯标准库胶水,不把 pytest 引进核心) | ✅ |
 | B5 | config 扩展转型(list / enum / 嵌套) | 出现真实通用配置项需要 | 核心(仅当确为通用) | 待证据 |
 | B6 | 统一异常基类 `CorespineError` | 多个 app 需统一 `catch` corespine 错误 | 核心(`errors.py`:基类 + `error_to_dict` + `ConfigError`/`SeamError`) | ✅ |
 | B7 | 稳定性契约(公开面冻结 / SemVer / deprecation) | 出现依赖其稳定性的外部消费者 | 流程 + 文档 | 待证据 |
+
+> **B1 证据复核(2026-06-23):** trace **缝本身**(隐私 sink 机制)已被 **2 个真实消费者**用上——
+> ragspine(`common/observability.py`:把 `InProcessPrivacyTraceSink` 包成隐私闸门)与 spineagent
+> (`agent.step` / orchestration:以 `TraceSink` 形参做注入点,并在 conformance 复用 `FORBIDDEN_KEYS`)。
+> **但 B1 的触发条件是"≥2 app 需要【导出】trace"**,而当下两者都只用进程内默认 sink:ragspine 仅把
+> `TraceSink → OTel` 列在 P2 路线(规划未落地),spineagent 不导出。**导出证据不足,故不实现任何真实
+> 导出 sink(OTel)**;只把"接导出后端走 app/contrib 侧 extra"的形状写进 [`extending.md` 四](extending.md)
+> + [`examples/trace_seam_usage.py`](../examples/trace_seam_usage.py)(范例用纯标准库假 exporter 站位)。
+> 待第 2 个 app 真正需要导出时再按"可选 extra / contrib,不进核心默认路径"落地。
 
 ### C. 家族前置(最重要,解锁 B 类证据)
 

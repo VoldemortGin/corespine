@@ -66,4 +66,11 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
+warn_unreachable = true
 files = ["src/corespine"]
+
+# pytest:加宽的零警告门(标准 §11)——warnings-as-errors(把静默 warning 升为失败,
+# 这是薄核最该堵的隐性失败面)+ importlib 导入模式(现代 src 布局推荐,避免 sys.path 污染)。
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+filterwarnings = ["error"]

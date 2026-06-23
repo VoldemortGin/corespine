@@ -18,7 +18,7 @@
 
 提上来一块前,五问必须**全 yes**:
 
-1. **证据** —— ≥2 个兄弟包(ragspine / agentspine / …)各自实现过同一块,且形状已收敛?
+1. **证据** —— ≥2 个兄弟包(ragspine / spineagent / …)各自实现过同一块,且形状已收敛?
 2. **domain-neutral** —— 换一个完全不同的后端引擎,这段代码还成立?
 3. **离线默认** —— 能给出一个零依赖、确定性、可复现的默认实现?
 4. **机制非保证** —— 只提供机制,不绑任何具体业务不变量?
@@ -43,7 +43,7 @@
 | llm/provider | streaming、批量、token 计量 | ≥2 app 在缝上重复同一形状 | 先扩 Protocol(最小),实现走 extra |
 | config/env | list / enum / 嵌套 转型(已支持 str/int/float/bool 及 `X\|None`) | 出现真实配置项需要 | 核心(仅当确为通用) |
 | queue/task_queue | 真实后端(RQ / Celery)adapter、重试 / 延迟语义 | ≥2 app 接同一类后端 | adapter 走 extra / contrib;协议扩不扩看证据 |
-| conformance/harness | pytest 集成助手(`cases()` → `parametrize`) | ragspine + agentspine 都在重复这段胶水 | **独立插件包或 contrib,绝不把 pytest 引进核心** |
+| conformance/harness | pytest 集成助手(`cases()` → `parametrize`) | ragspine + spineagent 都在重复这段胶水 | **独立插件包或 contrib,绝不把 pytest 引进核心** |
 
 原则:**Protocol 可小步扩,真实实现一律走 extra。** 核心默认路径永远零重依赖、离线确定性。
 
@@ -58,7 +58,7 @@
 
 ### 三层:家族证据闭环(最重要的前置)
 
-- **让 ragspine / agentspine 真正消费 corespine。** 这是 rule-of-three 证据的**唯一来源**。
+- **让 ragspine / spineagent 真正消费 corespine。** 这是 rule-of-three 证据的**唯一来源**。
   在两个兄弟包真实依赖、并各自在某条缝上"痛"之前,一层 / 二层的多数条目都不该动。
 - **跨包 conformance**:当多个 app 对同一缝各绑不变量时,用现有
   `ConformanceSuite × InvariantPack` 机制承接,反推机制是否够用。

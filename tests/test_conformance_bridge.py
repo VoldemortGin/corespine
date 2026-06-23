@@ -1,6 +1,6 @@
 """conformance pytest 集成桥合约:parametrize_kwargs() 收敛消费者 glue。
 
-证据驱动:ragspine 在 conftest 手写 @pytest.fixture(params=...) 参数化、agentspine
+证据驱动:ragspine 在 conftest 手写 @pytest.fixture(params=...) 参数化、spineagent
 手写遍历 cases() 的 glue——两处在做同一件事。把它提成 ConformanceSuite 上一个返回
 纯数据的方法,消费者就只需:
 

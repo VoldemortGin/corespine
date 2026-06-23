@@ -6,7 +6,7 @@ Spine 家族的 AI / 人类协作契约。先读家族 `../README.md` 与
 ## 这是什么
 
 **corespine —— Spine 家族的「薄」共享核**(ADR 0001 D3/D5)。只装 **domain-neutral 的底层原语**:
-那些**既不属于 RAG、也不属于 agent** 的稳定地基。它被 `ragspine` / `agentspine` 等兄弟包各自依赖,
+那些**既不属于 RAG、也不属于 agent** 的稳定地基。它被 `ragspine` / `spineagent` 等兄弟包各自依赖,
 但**不**反向依赖任何一个,也**不**含任何它们的领域概念。
 
 ## 宪章(不可违背)

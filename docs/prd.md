@@ -55,7 +55,7 @@ A 类已全部落地(✅),示例 / 文档见 `examples/` 与 `docs/`:
 | B1 | trace 真实 sink(OTel 等) | ≥2 app 需要**导出** trace | 可选 extra / contrib,**不进核心默认路径** | 待证据(见下注) |
 | B2 | llm streaming / 批量 / token 计量 | ≥2 app 在缝上重复同一形状 | 先扩 Protocol(最小),实现走 extra | 待证据 |
 | B3 | queue 真实后端 adapter(RQ/Celery)+ 重试/延迟 | ≥2 app 接同一类后端 | adapter 走 extra/contrib;协议扩不扩看证据 | 待证据 |
-| B4 | conformance × pytest 集成助手 | ragspine + agentspine 都在重复 `cases()`→`parametrize` 胶水 | `harness.parametrize_kwargs`(纯标准库胶水,不把 pytest 引进核心) | ✅ |
+| B4 | conformance × pytest 集成助手 | ragspine + spineagent 都在重复 `cases()`→`parametrize` 胶水 | `harness.parametrize_kwargs`(纯标准库胶水,不把 pytest 引进核心) | ✅ |
 | B5 | config 扩展转型(list / enum / 嵌套) | 出现真实通用配置项需要 | 核心(仅当确为通用) | 待证据 |
 | B6 | 统一异常基类 `CorespineError` | 多个 app 需统一 `catch` corespine 错误 | 核心(`errors.py`:基类 + `error_to_dict` + `ConfigError`/`SeamError`) | ✅ |
 | B7 | 稳定性契约(公开面冻结 / SemVer / deprecation) | 出现依赖其稳定性的外部消费者 | 流程 + 文档 | 待证据 |
@@ -73,7 +73,7 @@ A 类已全部落地(✅),示例 / 文档见 `examples/` 与 `docs/`:
 
 | # | 项 | 说明 |
 |---|---|---|
-| C1 | ragspine / agentspine 真正依赖 corespine | rule-of-three 证据的**唯一来源**;在此之前 B 类多数不该动 |
+| C1 | ragspine / spineagent 真正依赖 corespine | rule-of-three 证据的**唯一来源**;在此之前 B 类多数不该动 |
 | C2 | 跨包 conformance 验证 | 多 app 各绑不变量时,验证现有机制是否够用,反推增强 |
 
 ## 不做(护栏)

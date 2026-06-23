@@ -6,7 +6,7 @@
 ## 是什么
 
 corespine 是 **Spine 家族的薄共享核**:一组 **domain-neutral 的底层原语**——那些既不属于
-RAG、也不属于 agent 的稳定地基。它被 `ragspine` / `agentspine` 等兄弟包各自依赖,但**不**反向
+RAG、也不属于 agent 的稳定地基。它被 `ragspine` / `spineagent` 等兄弟包各自依赖,但**不**反向
 依赖任何一个,也**不**含任何它们的领域概念。
 
 它由六条「缝」(seam)+ 一个 errors 缝构成,每条缝只装【极小且明显稳定】的机制。核心

@@ -2,7 +2,7 @@
 
 Spine 家族的**薄共享核**(见 [ADR 0001](../docs/adr/0001-spine-family-boundaries-and-dependency-direction.md))。
 只装 **domain-neutral 的底层原语**——既不属于 RAG 也不属于 agent 的稳定地基,被 `ragspine` /
-`agentspine` 兄弟包各自依赖,**不**含任何它们的领域概念。
+`spineagent` 兄弟包各自依赖,**不**含任何它们的领域概念。
 
 > 刻意地薄。按证据(rule of three)增长,不预先造框架。详见 [`CLAUDE.md`](CLAUDE.md) 宪章。
 >

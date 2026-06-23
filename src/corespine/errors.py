@@ -79,3 +79,18 @@ class SeamError(CorespineError):
     """缝相关错误(未知实现、工厂构造失败等)。"""
 
     code = "seam.unknown"
+
+
+class ProviderError(CorespineError):
+    """provider / 外部服务调用失败的统一边界异常(网络/超时/API 错误归一到此)。
+
+    只包裹 SDK / 外部服务抛出的网络/超时/API 异常;程序错误(KeyError/TypeError 等)
+    不归此类,照常向上抛出,避免韧性兜底掩盖逻辑 bug。
+
+    rule of three:ragspine.agent 与 spineagent.llm 都各自本地定义过同形 ProviderError
+    (同继承 CorespineError、同 code="provider.error"),两个消费者重复同一块稳定边界面
+    → 恰好那块提上 corespine(见 docs/adr/0002)。具体哪些 vendor 异常归一到此、是否重试,
+    仍由各 app 在自己的适配器里绑(ADR 0001 D6),core 只给稳定的边界异常类型。
+    """
+
+    code = "provider.error"

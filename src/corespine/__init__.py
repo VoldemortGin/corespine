@@ -10,7 +10,13 @@ from importlib.metadata import version as _pkg_version
 
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
-from corespine.errors import ConfigError, CorespineError, SeamError, error_to_dict
+from corespine.errors import (
+    ConfigError,
+    CorespineError,
+    ProviderError,
+    SeamError,
+    error_to_dict,
+)
 from corespine.llm.provider import (
     ChatCompletion,
     Choice,
@@ -73,5 +79,6 @@ __all__ = [
     "error_to_dict",
     "ConfigError",
     "SeamError",
+    "ProviderError",
     "__version__",
 ]

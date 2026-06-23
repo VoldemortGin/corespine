@@ -1,6 +1,6 @@
 [project]
 name = "corespine"
-version = "0.1.0"
+version = "0.1.1"
 description = "Spine 家族的薄共享核:domain-neutral 底层原语(缝注册表 / observability / LLM 缝 / config / queue / conformance 基座)。"
 readme = "README.md"
 license = "Apache-2.0"

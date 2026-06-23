@@ -27,21 +27,25 @@ test: ## 跑测试套件
 
 .PHONY: lint
 lint: ## ruff 静态检查(风格 + import 顺序 + 死代码)
-	$(PYTHON) -m ruff check src tests
+	$(PYTHON) -m ruff check src tests benchmarks
 
 .PHONY: typecheck
 typecheck: ## mypy --strict 类型检查(出货代码 src)
 	$(PYTHON) -m mypy
 
 .PHONY: fmt
-fmt: ## ruff 自动格式化(src / tests / examples)
-	$(PYTHON) -m ruff format src tests examples
+fmt: ## ruff 自动格式化(src / tests / examples / benchmarks)
+	$(PYTHON) -m ruff format src tests examples benchmarks
 
-# ---- demo ----------------------------------------------------------------------------
+# ---- demo / bench --------------------------------------------------------------------
 
 .PHONY: demo
 demo: ## 跑离线快速上手示例(期望末行 "corespine OK")
 	$(PYTHON) examples/quickstart.py
+
+.PHONY: bench
+bench: ## 跑缝开销基线(纯标准库 timeit,期望末行 "bench seams OK")
+	$(PYTHON) benchmarks/bench_seams.py
 
 # ---- meta ----------------------------------------------------------------------------
 

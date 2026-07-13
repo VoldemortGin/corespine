@@ -3,3 +3,6 @@ __pycache__/
 *.egg-info/
 *.pyc
 .pytest_cache/
+
+# 构建产物(wheel/sdist)不入库
+dist/

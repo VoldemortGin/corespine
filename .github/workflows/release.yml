@@ -37,8 +37,8 @@ jobs:
 
       - name: Install (editable + dev)
         run: |
-          uv venv
-          uv pip install -e ".[dev]"
+          uv venv --clear .venv
+          VIRTUAL_ENV="$(pwd)/.venv" uv pip install -e ".[dev]"
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint (ruff)

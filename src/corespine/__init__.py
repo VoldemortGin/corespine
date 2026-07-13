@@ -8,6 +8,15 @@ env 配置 / 任务队列 / conformance 基座。刻意保持极小,按证据(ru
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from corespine.blob.store import (
+    BLOB_REGISTRY,
+    BlobError,
+    BlobNotFound,
+    BlobStore,
+    FileSystemBlobStore,
+    MemoryBlobStore,
+    make_blob_store,
+)
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
 from corespine.errors import (
@@ -63,6 +72,14 @@ __all__ = [
     "FunctionCall",
     "Usage",
     "RateLimitedProvider",
+    # blob(key -> bytes 制品存储)
+    "BlobStore",
+    "MemoryBlobStore",
+    "FileSystemBlobStore",
+    "BlobError",
+    "BlobNotFound",
+    "make_blob_store",
+    "BLOB_REGISTRY",
     # config
     "load_from_env",
     "env_key",

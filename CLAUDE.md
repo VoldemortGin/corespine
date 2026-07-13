@@ -32,8 +32,10 @@ core 只 import Protocol,**绝不** import 任何 SDK。
 ```
 src/corespine/
   seam/registry.py         Registry(name->factory) + make(spec) + entry-point 发现 + lazy_extra_import
+  blob/store.py            BlobStore 协议(key->bytes)+ Memory/FileSystem 默认 + make_blob_store 工厂
   observability/trace.py   TraceSink 协议 + InProcessPrivacyTraceSink(只记 code/计数/耗时,拒绝正文)
-  llm/provider.py          LLMProvider 协议 + 离线确定性 MockProvider
+                           + TraceExporter 扇出协议(导出面与本地面等宽,校验后才扇出)
+  llm/provider.py          LLMProvider 协议 + StreamingLLMProvider 叠加协议 + 离线确定性 MockProvider
   config/env.py            load_from_env:PREFIX_* env -> frozen dataclass(范式同 ragspine from_env)
   queue/task_queue.py      TaskQueue 协议 + 同步内联 FakeQueue 默认
   conformance/harness.py   ConformanceSuite × InvariantPack:实现 × 不变量 笛卡尔积(机制,无具体不变量)

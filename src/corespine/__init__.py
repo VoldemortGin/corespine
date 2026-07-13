@@ -28,11 +28,15 @@ from corespine.errors import (
 )
 from corespine.llm.provider import (
     ChatCompletion,
+    ChatCompletionChunk,
     Choice,
+    ChoiceDelta,
+    ChunkChoice,
     FunctionCall,
     LLMProvider,
     MockProvider,
     ResponseMessage,
+    StreamingLLMProvider,
     ToolCall,
     Usage,
 )
@@ -68,6 +72,7 @@ __all__ = [
     "FORBIDDEN_KEYS",
     # llm(OpenAI chat-completions 规范)
     "LLMProvider",
+    "StreamingLLMProvider",
     "MockProvider",
     "ChatCompletion",
     "Choice",
@@ -75,6 +80,9 @@ __all__ = [
     "ToolCall",
     "FunctionCall",
     "Usage",
+    "ChatCompletionChunk",
+    "ChunkChoice",
+    "ChoiceDelta",
     "RateLimitedProvider",
     # blob(key -> bytes 制品存储)
     "BlobStore",

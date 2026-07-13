@@ -36,7 +36,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install (editable + dev)
-        run: uv pip install --system -e ".[dev]"
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint (ruff)
         run: ruff check src tests benchmarks

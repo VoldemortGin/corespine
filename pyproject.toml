@@ -1,6 +1,6 @@
 [project]
 name = "corespine"
-version = "0.2.0"
+version = "0.3.0"
 description = "Spine 家族的薄共享核:domain-neutral 底层原语(缝注册表 / observability / LLM 缝 / config / queue / conformance 基座)。"
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,8 +32,12 @@ classifiers = [
 # 在自己的缝里经可选 extra 延迟 import,核心不背任何运行时三方依赖。
 dependencies = []
 
+# crypto:仅 EncryptedFileCredentialStore 需要(Fernet 对称加密)。默认路径零依赖,
+# cryptography(Apache-2.0/BSD 双许可)经此可选 extra 延迟 import,dependencies 仍为空。
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.6", "mypy>=1.11"]
+crypto = ["cryptography>=42"]
+# dev 内含 crypto,使 conformance 在 CI 下覆盖全部实现(含加密实现)。
+dev = ["pytest>=8.0.0", "ruff>=0.6", "mypy>=1.11", "cryptography>=42"]
 
 [build-system]
 requires = ["hatchling"]

@@ -24,6 +24,7 @@ Spine 家族的**薄共享核**(见 [ADR 0001](../docs/adr/0001-spine-family-bou
 | `config/env.py` | `load_from_env`:把 `PREFIX_*` 环境变量读进一个 frozen dataclass(范式同 ragspine `from_env`) |
 | `queue/task_queue.py` | `TaskQueue` 协议 + `FakeQueue`:同步内联执行 + 记录,离线/测试用 |
 | `conformance/harness.py` | `ConformanceSuite` × `InvariantPack`:把"实现 × 不变量"绑成笛卡尔积逐格执行(**机制**,具体不变量由各 app 自己绑) |
+| `credential/store.py` | `CredentialStore` 协议(namespace × name → secret)+ `Memory` / `InsecureLocal`(明文 + 0600)零依赖默认 + `EncryptedFile`(经 `[crypto]` extra 用 Fernet);秘密值永不入 repr/str/异常/trace |
 
 ## 本地开发(始终从包根)
 

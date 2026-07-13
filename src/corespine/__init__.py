@@ -19,6 +19,16 @@ from corespine.blob.store import (
 )
 from corespine.config.env import env_key, load_from_env
 from corespine.conformance.harness import CaseResult, ConformanceSuite, InvariantPack
+from corespine.credential.store import (
+    CREDENTIAL_REGISTRY,
+    CredentialError,
+    CredentialNotFound,
+    CredentialStore,
+    EncryptedFileCredentialStore,
+    InsecureLocalCredentialStore,
+    MemoryCredentialStore,
+    make_credential_store,
+)
 from corespine.errors import (
     ConfigError,
     CorespineError,
@@ -92,6 +102,15 @@ __all__ = [
     "BlobNotFound",
     "make_blob_store",
     "BLOB_REGISTRY",
+    # credential(namespace × name -> secret)
+    "CredentialStore",
+    "MemoryCredentialStore",
+    "InsecureLocalCredentialStore",
+    "EncryptedFileCredentialStore",
+    "CredentialError",
+    "CredentialNotFound",
+    "make_credential_store",
+    "CREDENTIAL_REGISTRY",
     # config
     "load_from_env",
     "env_key",

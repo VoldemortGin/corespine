@@ -40,8 +40,10 @@ from corespine.llm.rate_limit import RateLimitedProvider
 from corespine.observability.trace import (
     FORBIDDEN_KEYS,
     InProcessPrivacyTraceSink,
+    InProcessTraceExporter,
     TraceError,
     TraceEvent,
+    TraceExporter,
     TraceSink,
 )
 from corespine.queue.task_queue import FakeQueue, JobStatus, TaskQueue
@@ -58,9 +60,11 @@ __all__ = [
     "lazy_extra_import",
     # observability
     "TraceSink",
+    "TraceExporter",
     "TraceEvent",
     "TraceError",
     "InProcessPrivacyTraceSink",
+    "InProcessTraceExporter",
     "FORBIDDEN_KEYS",
     # llm(OpenAI chat-completions 规范)
     "LLMProvider",

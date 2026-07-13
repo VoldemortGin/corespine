@@ -62,6 +62,16 @@ from corespine.observability.trace import (
 )
 from corespine.queue.task_queue import FakeQueue, JobStatus, TaskQueue
 from corespine.seam.registry import Registry, lazy_extra_import
+from corespine.trigger.source import (
+    TRIGGER_MANUAL,
+    TRIGGER_REGISTRY,
+    TRIGGER_SCHEDULE,
+    ManualTrigger,
+    ScheduleTrigger,
+    TriggerEvent,
+    TriggerSource,
+    make_trigger,
+)
 
 try:
     __version__ = _pkg_version("corespine")
@@ -118,6 +128,15 @@ __all__ = [
     "TaskQueue",
     "JobStatus",
     "FakeQueue",
+    # trigger(外部信号源 -> TriggerEvent,拉模式)
+    "TriggerSource",
+    "TriggerEvent",
+    "ManualTrigger",
+    "ScheduleTrigger",
+    "make_trigger",
+    "TRIGGER_REGISTRY",
+    "TRIGGER_MANUAL",
+    "TRIGGER_SCHEDULE",
     # conformance
     "ConformanceSuite",
     "InvariantPack",

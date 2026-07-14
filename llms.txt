@@ -8,7 +8,7 @@
 
 - pip 安装名:`corespine`(`pip install corespine`)
 - import 名:`import corespine`
-- Python:>= 3.10 · 依赖:**无**(核心 `dependencies` 恒空)· 版本:0.0.1
+- Python:>= 3.10 · 依赖:**无**(核心 `dependencies` 恒空)· 版本:0.4.0
 
 ## 文档地图(docs/llms/)
 

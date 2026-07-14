@@ -4,6 +4,7 @@ version = "0.4.0"
 description = "Spine 家族的薄共享核:domain-neutral 底层原语(缝注册表 / observability / LLM 缝 / config / queue / conformance 基座)。"
 readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "lin han" }]
 keywords = [

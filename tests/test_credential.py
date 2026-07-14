@@ -11,12 +11,16 @@ EncryptedFileCredentialStore 需要 `corespine[crypto]`(cryptography);dev extra 
 import importlib.util
 import os
 import stat
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
 from corespine.conformance.harness import ConformanceSuite, InvariantPack
 from corespine.credential.store import (
     CREDENTIAL_REGISTRY,
+    CredentialError,
     CredentialNotFound,
     CredentialStore,
     EncryptedFileCredentialStore,
@@ -201,6 +205,138 @@ def test_insecure_persists_across_instances(tmp_path):
     InsecureLocalCredentialStore(path).set("ns", "k", "payload")
     # 同 path 新实例(模拟跨进程):读回同值。
     assert InsecureLocalCredentialStore(path).get("ns", "k") == "payload"
+
+
+def test_file_stores_same_path_serialize_load_modify_save(tmp_path):
+    """同进程的不同实例不能因并发整文件更新而丢失彼此写入。"""
+
+    class SlowDecodeStore(InsecureLocalCredentialStore):
+        def _decode(self, raw: bytes) -> str:
+            # 让旧实现的两个实例稳定地读到同一份快照，再分别覆盖落盘。
+            time.sleep(0.05)
+            return super()._decode(raw)
+
+    path = tmp_path / "shared-concurrent.json"
+    InsecureLocalCredentialStore(path).set("ns", "seed", "0")
+    stores = [SlowDecodeStore(path), SlowDecodeStore(path)]
+    start = threading.Barrier(3)
+    errors: list[BaseException] = []
+
+    def write(store: SlowDecodeStore, name: str) -> None:
+        start.wait()
+        try:
+            store.set("ns", name, name)
+        except BaseException as exc:  # noqa: BLE001 - 线程异常回传主测试
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=write, args=(stores[0], "a")),
+        threading.Thread(target=write, args=(stores[1], "b")),
+    ]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert not errors
+    final = InsecureLocalCredentialStore(path)
+    assert final.get("ns", "a") == "a"
+    assert final.get("ns", "b") == "b"
+
+
+def test_file_store_failed_replace_preserves_previous_data_and_cleans_temp(tmp_path, monkeypatch):
+    """原子提交失败时，旧凭据仍可读且同目录不遗留临时文件。"""
+    path = tmp_path / "atomic.json"
+    store = InsecureLocalCredentialStore(path)
+    store.set("ns", "key", "old")
+    before = {item.name for item in tmp_path.iterdir()}
+
+    def fail_replace(src, dst):
+        raise OSError("simulated replace failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", fail_replace)
+        with pytest.raises(OSError, match="simulated replace failure"):
+            store.set("ns", "key", "new")
+
+    assert store.get("ns", "key") == "old"
+    assert {item.name for item in tmp_path.iterdir()} == before
+
+
+def test_file_store_rejects_symlink_on_read(tmp_path):
+    """凭据读取拒绝最终路径 symlink，不能静默跟随到另一文件。"""
+    target = tmp_path / "target.json"
+    target.write_text('{"ns": {"key": "target-secret"}}', encoding="utf-8")
+    link = tmp_path / "credentials.json"
+    try:
+        link.symlink_to(target)
+    except (NotImplementedError, OSError):
+        pytest.skip("当前平台不允许创建 symlink")
+
+    store = InsecureLocalCredentialStore(link)
+    with pytest.raises(CredentialError, match="普通文件"):
+        store.get("ns", "key")
+
+
+def test_file_store_rejects_symlink_on_write_without_clobbering_target(tmp_path):
+    """凭据写入拒绝既有 symlink，不能截断或改写其目标。"""
+    target = tmp_path / "victim.txt"
+    target.write_text("do-not-clobber", encoding="utf-8")
+    link = tmp_path / "credentials.json"
+    try:
+        link.symlink_to(target)
+    except (NotImplementedError, OSError):
+        pytest.skip("当前平台不允许创建 symlink")
+
+    store = InsecureLocalCredentialStore(link)
+    with pytest.raises(CredentialError, match="普通文件"):
+        store.set("ns", "key", "secret")
+    assert target.read_text(encoding="utf-8") == "do-not-clobber"
+    assert link.is_symlink()
+
+
+def test_file_store_atomic_replace_does_not_follow_racing_symlink(tmp_path, monkeypatch):
+    """load 后才出现的目标 symlink 会被替换为凭据文件，而不是跟随并改写目标。"""
+    target = tmp_path / "victim.txt"
+    target.write_text("do-not-clobber", encoding="utf-8")
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to(target)
+        probe.unlink()
+    except (NotImplementedError, OSError):
+        pytest.skip("当前平台不允许创建 symlink")
+
+    path = tmp_path / "credentials.json"
+    store = InsecureLocalCredentialStore(path)
+    real_replace = os.replace
+    swapped = False
+
+    def swap_then_replace(src, dst):
+        nonlocal swapped
+        Path(dst).symlink_to(target)
+        swapped = True
+        real_replace(src, dst)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", swap_then_replace)
+        store.set("ns", "key", "secret")
+
+    assert swapped
+    assert not path.is_symlink()
+    assert target.read_text(encoding="utf-8") == "do-not-clobber"
+    assert store.get("ns", "key") == "secret"
+
+
+def test_file_store_rejects_non_regular_file(tmp_path):
+    """目录等非普通文件不能被当作 credential 文件读取。"""
+    path = tmp_path / "credentials-dir"
+    path.mkdir()
+    store = InsecureLocalCredentialStore(path)
+
+    with pytest.raises(CredentialError, match="普通文件"):
+        store.list("ns")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX 权限位在 Windows 无意义")

@@ -5,7 +5,7 @@
 > [overview.md](overview.md),易错点见 [gotchas.md](gotchas.md)。
 >
 > 全部从顶层包导入:`from corespine import Registry, MockProvider, ...`。
-> `corespine.__version__ == "0.0.1"`。`__all__` 共 28 项(含 `__version__`)。
+> `corespine.__version__ == "0.4.0"`。`__all__` 共 59 项(含 `__version__`)。
 
 ## seam —— `corespine.seam.registry`
 

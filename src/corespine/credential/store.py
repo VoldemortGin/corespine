@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import json
 import os
+import stat
+import tempfile
+import threading
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
@@ -37,6 +40,22 @@ from corespine.seam.registry import Registry, lazy_extra_import
 
 # 落地文件的内部布局:{namespace: {name: value}} 的 JSON。
 _Store = dict[str, dict[str, str]]
+
+# 文件 store 是整文件 read-modify-write；同进程中即使构造了多个实例，也必须按同一路径
+# 共用一把锁，否则两个更新会各自从旧快照出发、后写者覆盖先写者。
+_FILE_LOCKS_GUARD = threading.Lock()
+_FILE_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _shared_file_lock(path: Path) -> threading.RLock:
+    """按不跟随最终文件 symlink 的 canonical 路径复用进程内 RLock。"""
+    canonical = os.path.normcase(str(path.parent.resolve() / path.name))
+    with _FILE_LOCKS_GUARD:
+        lock = _FILE_LOCKS.get(canonical)
+        if lock is None:
+            lock = threading.RLock()
+            _FILE_LOCKS[canonical] = lock
+        return lock
 
 
 class CredentialError(CorespineError):
@@ -119,8 +138,11 @@ class _FileCredentialStore:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self._path = Path(path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        requested = Path(path).expanduser()
+        requested.parent.mkdir(parents=True, exist_ok=True)
+        # 固定父目录的 canonical 位置，但保留最终文件名本身，绝不 resolve 最终 symlink。
+        self._path = requested.parent.resolve() / requested.name
+        self._lock = _shared_file_lock(self._path)
 
     # --- 子类钩子:明文直通 / Fernet 加解密 -----------------------------------
     def _encode(self, text: str) -> bytes:
@@ -131,9 +153,57 @@ class _FileCredentialStore:
 
     # --- 共用的整文件载入 / 落回 ----------------------------------------------
     def _load(self) -> _Store:
-        if not self._path.exists():
+        try:
+            before = os.lstat(self._path)
+        except FileNotFoundError:
             return {}
-        raw = self._path.read_bytes()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise CredentialError(
+                f"凭据文件必须是普通文件且不能是 symlink:path={str(self._path)!r}",
+                path=str(self._path),
+            )
+
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd: int | None = None
+        try:
+            try:
+                fd = os.open(self._path, flags)
+            except FileNotFoundError:
+                return {}
+            except OSError as exc:
+                raise CredentialError(
+                    f"凭据文件无法安全打开:path={str(self._path)!r}",
+                    path=str(self._path),
+                ) from exc
+
+            opened = os.fstat(fd)
+            try:
+                after = os.lstat(self._path)
+            except FileNotFoundError as exc:
+                raise CredentialError(
+                    f"凭据文件在读取期间被替换:path={str(self._path)!r}",
+                    path=str(self._path),
+                ) from exc
+            same_file = (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or stat.S_ISLNK(after.st_mode)
+                or not stat.S_ISREG(after.st_mode)
+                or not same_file
+            ):
+                raise CredentialError(
+                    f"凭据文件必须是普通文件且不能是 symlink:path={str(self._path)!r}",
+                    path=str(self._path),
+                )
+            with os.fdopen(fd, "rb") as handle:
+                fd = None  # fdopen 接管关闭责任
+                raw = handle.read()
+        finally:
+            if fd is not None:
+                os.close(fd)
         if not raw:
             return {}
         data: _Store = json.loads(self._decode(raw))
@@ -141,39 +211,63 @@ class _FileCredentialStore:
 
     def _save(self, data: _Store) -> None:
         payload = self._encode(json.dumps(data, ensure_ascii=False))
-        # 先建文件并收紧权限到 0600,再写入——尽量缩小明文/密文以宽权限暴露的窗口。
-        # (Windows 上 chmod 语义有限但不报错;POSIX 上即租户秘密的最小落地防线。)
-        fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # 同目录 0600 临时普通文件完整落盘后原子替换：写失败时旧文件保持完整，且 replace
+        # 替换最终目录项而不跟随目标 symlink。Windows 上 chmod 语义有限，但不影响原子提交。
+        fd: int | None = None
+        temp_path: Path | None = None
         try:
-            os.write(fd, payload)
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{self._path.name}.", suffix=".tmp", dir=self._path.parent
+            )
+            temp_path = Path(temp_name)
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(fd, 0o600)
+            else:  # pragma: no cover - Windows 无 POSIX mode bits
+                os.chmod(temp_path, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                fd = None  # fdopen 接管关闭责任
+                written = handle.write(payload)
+                if written != len(payload):
+                    raise OSError("credential 临时文件未完整写入")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, self._path)
+            temp_path = None
         finally:
-            os.close(fd)
-        os.chmod(self._path, 0o600)
+            if fd is not None:
+                os.close(fd)
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     def set(self, namespace: str, name: str, value: str) -> None:
-        data = self._load()
-        data.setdefault(namespace, {})[name] = value
-        self._save(data)
+        with self._lock:
+            data = self._load()
+            data.setdefault(namespace, {})[name] = value
+            self._save(data)
 
     def get(self, namespace: str, name: str) -> str:
-        try:
-            return self._load()[namespace][name]
-        except KeyError:
-            raise CredentialNotFound(
-                f"凭据不存在:namespace={namespace!r} name={name!r}",
-                namespace=namespace,
-                name=name,
-            ) from None
+        with self._lock:
+            try:
+                return self._load()[namespace][name]
+            except KeyError:
+                raise CredentialNotFound(
+                    f"凭据不存在:namespace={namespace!r} name={name!r}",
+                    namespace=namespace,
+                    name=name,
+                ) from None
 
     def delete(self, namespace: str, name: str) -> None:
-        data = self._load()
-        bucket = data.get(namespace)
-        if bucket is not None and name in bucket:
-            del bucket[name]
-            self._save(data)  # 幂等:不存在则不落回
+        with self._lock:
+            data = self._load()
+            bucket = data.get(namespace)
+            if bucket is not None and name in bucket:
+                del bucket[name]
+                self._save(data)  # 幂等:不存在则不落回
 
     def list(self, namespace: str) -> list[str]:
-        return sorted(self._load().get(namespace, {}))
+        with self._lock:
+            return sorted(self._load().get(namespace, {}))
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(path={str(self._path)!r})"

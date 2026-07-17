@@ -17,6 +17,9 @@
 | llm/rate_limit | `RateLimitedProvider`(包装任意 LLMProvider,每分钟 token 上限,超限阻塞等待) | 纯标准库滑动窗口(threading + deque,事后按 usage 累计) | ✅ |
 | config/env | `load_from_env` / `env_key` | env→frozen dataclass(含 `X\|None`) | ✅ |
 | queue/task_queue | `TaskQueue` / `JobStatus` | `FakeQueue`(同步内联) | ✅ |
+| blob/store | `BlobStore` / `BlobError` / `BlobNotFound` | `MemoryBlobStore` / `FileSystemBlobStore` | ✅ |
+| credential/store | `CredentialStore` / `CredentialError` / `CredentialNotFound` | `MemoryCredentialStore` / `InsecureLocalCredentialStore`(明文+0600) | ✅ |
+| trigger/source | `TriggerSource` / `TriggerEvent` | `ManualTrigger` / `ScheduleTrigger`(注入时钟) | ✅ |
 | conformance/harness | `ConformanceSuite` / `InvariantPack` / `CaseResult` + `parametrize_kwargs` | 实现×不变量笛卡尔积 | ✅ |
 | errors | `CorespineError` / `error_to_dict` / `ConfigError` / `SeamError` | 统一基类 + 任意异常归一 dict | ✅ |
 
@@ -52,8 +55,8 @@ A 类已全部落地(✅),示例 / 文档见 `examples/` 与 `docs/`:
 
 | # | 项 | 触发条件 | 落点 | 状态 |
 |---|---|---|---|---|
-| B1 | trace 真实 sink(OTel 等) | ≥2 app 需要**导出** trace | 可选 extra / contrib,**不进核心默认路径** | 待证据(见下注) |
-| B2 | llm streaming / 批量 / token 计量 | ≥2 app 在缝上重复同一形状 | 先扩 Protocol(最小),实现走 extra | 待证据 |
+| B1 | trace 真实 sink(OTel 等) | ≥2 app 需要**导出** trace | 可选 extra / contrib,**不进核心默认路径** | 部分完成(`TraceExporter` + `InProcessTraceExporter` 已落地;OTel exporter 未做) |
+| B2 | llm streaming / 批量 / token 计量 | ≥2 app 在缝上重复同一形状 | 先扩 Protocol(最小),实现走 extra | 部分完成(`StreamingLLMProvider` 已落地;batch 未做) |
 | B3 | queue 真实后端 adapter(RQ/Celery)+ 重试/延迟 | ≥2 app 接同一类后端 | adapter 走 extra/contrib;协议扩不扩看证据 | 待证据 |
 | B4 | conformance × pytest 集成助手 | ragspine + spineagent 都在重复 `cases()`→`parametrize` 胶水 | `harness.parametrize_kwargs`(纯标准库胶水,不把 pytest 引进核心) | ✅ |
 | B5 | config 扩展转型(list / enum / 嵌套) | 出现真实通用配置项需要 | 核心(仅当确为通用) | 待证据 |
@@ -71,10 +74,10 @@ A 类已全部落地(✅),示例 / 文档见 `examples/` 与 `docs/`:
 
 ### C. 家族前置(最重要,解锁 B 类证据)
 
-| # | 项 | 说明 |
-|---|---|---|
-| C1 | ragspine / spineagent 真正依赖 corespine | rule-of-three 证据的**唯一来源**;在此之前 B 类多数不该动 |
-| C2 | 跨包 conformance 验证 | 多 app 各绑不变量时,验证现有机制是否够用,反推增强 |
+| # | 项 | 说明 | 状态 |
+|---|---|---|---|
+| C1 | ragspine / spineagent 真正依赖 corespine | rule-of-three 证据的**唯一来源**;在此之前 B 类多数不该动 | ✅ |
+| C2 | 跨包 conformance 验证 | 多 app 各绑不变量时,验证现有机制是否够用,反推增强 | ✅ |
 
 ## 不做(护栏)
 

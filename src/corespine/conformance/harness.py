@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -31,7 +31,7 @@ Factory = Callable[[], T]
 
 
 @dataclass(frozen=True)
-class InvariantPack(Generic[T]):
+class InvariantPack[T]:
     """一组具名不变量。app 用它装自己的保证;harness 只负责跑。
 
     add() 返回自身,便于链式登记:InvariantPack("x").add(...).add(...)。
@@ -58,7 +58,7 @@ class CaseResult:
     error: str | None = None
 
 
-class ConformanceSuite(Generic[T]):
+class ConformanceSuite[T]:
     """把 实现注册表 × 不变量包 绑成可执行 / 可参数化的 conformance 套件。"""
 
     def __init__(self, implementations: dict[str, Factory[T]], pack: InvariantPack[T]) -> None:

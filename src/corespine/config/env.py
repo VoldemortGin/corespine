@@ -16,9 +16,7 @@ import dataclasses
 import os
 import types
 from collections.abc import Mapping
-from typing import TypeVar, Union, get_args, get_origin, get_type_hints
-
-T = TypeVar("T")
+from typing import Union, get_args, get_origin, get_type_hints
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
@@ -56,7 +54,7 @@ def _coerce(raw: str, tp: object) -> object:
     return raw
 
 
-def load_from_env(cls: type[T], *, prefix: str, env: Mapping[str, str] | None = None) -> T:
+def load_from_env[T](cls: type[T], *, prefix: str, env: Mapping[str, str] | None = None) -> T:
     """按 dataclass 字段从 PREFIX_* 读取并构造实例(缺失则用字段默认值)。
 
     env 可注入(默认读 os.environ);get_type_hints 解析注解,故 `from __future__

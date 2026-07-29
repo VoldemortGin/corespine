@@ -1,7 +1,7 @@
 # corespine — 常用开发 / CI 命令。
 #
 # `make` 或 `make help` 列出全部目标。目标默认使用项目 venv(.venv);
-# 覆盖解释器:  make test PYTHON=python3.12
+# 覆盖解释器:  make test PYTHON=python3.14
 #
 # 始终从包根运行。
 

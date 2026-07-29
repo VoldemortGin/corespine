@@ -4,7 +4,7 @@
 # 构建 / 运行命令见 deploy/README.md(构建上下文为仓库根)。
 
 # ---- builder:在独立 venv 里装入包 + dev ----------------------------------------------
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 # 从官方镜像拷入 uv 静态二进制(免装 pip,构建可复现)。
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -24,7 +24,7 @@ COPY src ./src
 RUN uv pip install -e ".[dev]"
 
 # ---- runtime:只带 venv + 跑测试 / demo 所需的源码 ------------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \

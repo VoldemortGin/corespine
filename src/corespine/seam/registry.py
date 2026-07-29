@@ -19,7 +19,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from importlib import metadata
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -35,7 +35,7 @@ def _normalize(spec: str) -> str:
     return spec.strip().lower().replace("-", "_").replace(" ", "_")
 
 
-class Registry(Generic[T]):
+class Registry[T]:
     """一条缝的 名字->工厂 注册表 + spec 解析 + entry-point 自动发现。"""
 
     def __init__(self, seam: str) -> None:

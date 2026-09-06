@@ -26,11 +26,12 @@
 
 任一为 no,就再等证据。**不预先造框架。**
 
-## 现状基线(2026-06)
+## 现状基线(2026-09)
 
-六条缝均已落地,各带离线确定性默认 + 参数化 conformance,测试全绿、import-clean、
+九条缝 + errors 缝均已落地,各带离线确定性默认 + 参数化 conformance,测试全绿、import-clean、
 `dependencies` 为空:`seam/registry` · `observability/trace` · `llm/provider` ·
-`config/env` · `queue/task_queue` · `conformance/harness`。下文方向均以此为基线。
+`config/env` · `queue/task_queue` · `blob/store` · `credential/store` · `trigger/source` ·
+`conformance/harness`,以及 `errors`(统一异常基类 `CorespineError`)。下文方向均以此为基线。
 
 ## 方向(三层,均附触发证据与落点)
 
@@ -49,8 +50,9 @@
 
 ### 二层:横切关注点(等痛点显现再动)
 
-- **统一异常基类**(如 `CorespineError`):当多个 app 需要统一 `catch` corespine 抛出的
-  错误时再引。当前 `TraceError` / `ValueError` / `TypeError` 分散且够用。
+- **统一异常基类**(`CorespineError`):**已落地**(2026-06)。`errors.py` 提供基类 +
+  `error_to_dict`,示范子类 `ConfigError` / `SeamError` / `ProviderError`;`TraceError` /
+  `BlobError` / `CredentialError` 均已改继承(见 ADR 0002)。
 - **稳定性契约**:公开面冻结、SemVer、deprecation 流程 —— 等出现**依赖其稳定性的外部
   消费者**时正式化。
 - **可选 extra 范式固化**:`lazy_extra_import` 已是机制;把 `[redis]` / `[openai]` 等 extra

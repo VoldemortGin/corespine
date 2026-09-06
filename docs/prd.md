@@ -6,7 +6,7 @@
 
 ## 现状(已完成)
 
-六条缝 + errors 缝均已落地,各带 Protocol + 离线确定性默认 + 工厂 + 参数化 conformance;
+九条缝 + errors 缝均已落地,各带 Protocol + 离线确定性默认 + 工厂 + 参数化 conformance;
 `make ci` 全绿(ruff + pytest)、import-clean、核心 `dependencies` 为空。
 
 | 缝 | 公开面 | 离线默认 | 状态 |

@@ -69,10 +69,11 @@ class Registry[T]:
         eps = metadata.entry_points(group=self.group)
         return {_normalize(ep.name): ep for ep in eps}
 
-    def make(self, spec: str, **kwargs: Any) -> T:
+    def make(self, spec: str, /, **kwargs: Any) -> T:
         """把 spec 解析到工厂并构造实例(大小写/留白/连字符不敏感)。
 
         解析顺序:内置注册 -> entry-point 发现 -> 抛 ValueError(列清可用名)。
+        spec 是【仅位置】参数:工厂自己的 `spec=` 关键字可经 **kwargs 透传而不撞名。
         """
         key = _normalize(spec)
         factory = self._factories.get(key)

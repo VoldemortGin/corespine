@@ -220,7 +220,7 @@ TRIGGER_REGISTRY.register("manual", ManualTrigger)
 TRIGGER_REGISTRY.register("schedule", _make_schedule)
 
 
-def make_trigger(spec: str, **kwargs: object) -> TriggerSource:
+def make_trigger(spec: str, /, **kwargs: object) -> TriggerSource:
     """按 spec 构造一个 TriggerSource(大小写 / 连字符 / 留白不敏感)。
 
     内置:"manual"(无参)、"schedule"(需 interval_s=... 与注入时钟 now_fn=...);未知 spec

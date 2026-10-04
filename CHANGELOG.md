@@ -21,3 +21,6 @@
   `corespine.conformance.packs.TRACE_PRIVACY_PACK`。默认 sink 现在对【嵌套】禁词键同样抛
   `TraceError`;`FORBIDDEN_KEYS` 并入 `raw_text` / `user_prompt` / `contents` / `question` /
   `output` / `messages`(以这些名字作 trace 字段的调用方会被拒绝,请改用计数类字段名)。
+- `Registry.make` 及 `make_blob_store` / `make_credential_store` / `make_trigger` 的 `spec` 改为
+  仅位置参数,工厂自己的 `spec=` 关键字不再抛 `TypeError: multiple values`。已核对全家族无人以
+  `make(spec=...)` 关键字形式调用,向后兼容。

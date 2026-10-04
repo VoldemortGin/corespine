@@ -338,7 +338,7 @@ CREDENTIAL_REGISTRY.register("insecure_local", _make_insecure_local)
 CREDENTIAL_REGISTRY.register("encrypted_file", _make_encrypted_file)
 
 
-def make_credential_store(spec: str, **kwargs: object) -> CredentialStore:
+def make_credential_store(spec: str, /, **kwargs: object) -> CredentialStore:
     """按 spec 构造一个 CredentialStore(大小写 / 连字符 / 留白不敏感)。
 
     内置:"memory"(无参)、"insecure_local"(需 path=...)、"encrypted_file"(需 path=... 与

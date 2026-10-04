@@ -74,3 +74,28 @@ def test_lazy_extra_import_returns_module_when_present():
     # 标准库一定在:应原样返回该模块对象,不抛。
     mod = lazy_extra_import("json", pkg="corespine", extra="toy")
     assert mod.dumps({"a": 1}) == '{"a": 1}'
+
+
+def test_make_allows_spec_keyword_for_factory():
+    # 工厂自己也想要一个叫 spec 的关键字参数:不再与 make 的位置参数撞名。
+    reg: Registry[str] = Registry("demo")
+    reg.register("a", lambda spec="d": f"got:{spec}")
+    assert reg.make("a", spec="v") == "got:v"
+    assert reg.make("a") == "got:d"
+
+
+def test_make_wrappers_allow_spec_keyword():
+    from corespine.blob.store import BLOB_REGISTRY, make_blob_store
+    from corespine.credential.store import CREDENTIAL_REGISTRY, make_credential_store
+    from corespine.trigger.source import TRIGGER_REGISTRY, make_trigger
+
+    for reg, make in (
+        (BLOB_REGISTRY, make_blob_store),
+        (CREDENTIAL_REGISTRY, make_credential_store),
+        (TRIGGER_REGISTRY, make_trigger),
+    ):
+        reg.register("spec_probe", lambda spec=None: spec)
+        try:
+            assert make("spec_probe", spec="v") == "v"
+        finally:
+            reg._factories.pop("spec_probe", None)

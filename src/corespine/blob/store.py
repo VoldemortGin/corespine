@@ -124,7 +124,7 @@ BLOB_REGISTRY.register("memory", MemoryBlobStore)
 BLOB_REGISTRY.register("filesystem", _make_filesystem)
 
 
-def make_blob_store(spec: str, **kwargs: object) -> BlobStore:
+def make_blob_store(spec: str, /, **kwargs: object) -> BlobStore:
     """按 spec 构造一个 BlobStore(大小写 / 连字符 / 留白不敏感)。
 
     内置:"memory"(无参)、"filesystem"(需 root=...);未知 spec 抛 ValueError 并列清可用名。

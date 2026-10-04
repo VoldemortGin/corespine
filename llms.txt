@@ -38,7 +38,7 @@ provider = reg.make("  MOCK ")
 out = provider.chat([{"role": "user", "content": "hello"}])
 print(out.choices[0].message.content)        # [mock:....] hello
 
-# 3) 隐私 trace:只记元数据(code/计数/耗时);塞正文(content/answer/...)会 raise TraceError
+# 3) 隐私 trace:只记元数据(code/计数/耗时);塞正文(content/answer/...)会 raise TraceError;长驻服务给 sink 设 max_events
 sink = InProcessPrivacyTraceSink()
 sink.emit("retrieve", count=3, took_ms=12)
 print(sink.codes())                           # ['retrieve']

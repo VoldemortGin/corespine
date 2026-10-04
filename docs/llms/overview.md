@@ -75,10 +75,10 @@ Protocol(只定结构接口,绝不 import 任何 SDK)
 | `seam/registry` | — | `Registry` + `lazy_extra_import` | `name->factory` 解析(归一)+ entry-point 自动发现(group `corespine.<seam>`)+ 未知 spec 列清可用名 |
 | `observability/trace` | `TraceSink` | `InProcessPrivacyTraceSink` | 只记 code/计数/耗时;载荷含正文字段(见 `FORBIDDEN_KEYS`)即 raise `TraceError` |
 | `llm/provider` | `LLMProvider` | `MockProvider` | OpenAI chat-completions 规范:`chat(messages, *, tools=None) -> ChatCompletion`;Mock 确定性、不伪造 tool_calls |
-| `config/env` | — | — | `load_from_env`:`PREFIX_*` env → frozen dataclass(支持 str/int/float/bool/Path/list[str] 及 `X\|None`) |
+| `config/env` | — | — | `load_from_env`:`PREFIX_*` env → frozen dataclass(支持 str/int/float/bool/Path/list[str]/Literal[字符串] 及 `X\|None`) |
 | `blob/store` | `BlobStore` | `MemoryBlobStore` / `FileSystemBlobStore` | key → bytes 制品存储;`make_blob_store` |
 | `credential/store` | `CredentialStore` | `MemoryCredentialStore` / `InsecureLocalCredentialStore` / `EncryptedFileCredentialStore`(`[crypto]`) | namespace × name → secret;秘密永不入 repr / 异常 / trace |
-| `trigger/source` | `TriggerSource` | `ManualTrigger` / `ScheduleTrigger` | 拉模式 `poll()` → `TriggerEvent`;`ScheduleTrigger` 注入时钟、`max_catchup` 限补发 |
+| `trigger/source` | `TriggerSource` | `ManualTrigger` / `ScheduleTrigger` | 拉模式 `poll()` → `TriggerEvent`;`ScheduleTrigger` 注入时钟、`max_catchup` + `catchup="drop_oldest"\|"batch"` 限补发(缺省不限) |
 | `llm/rate_limit` | (包装 `LLMProvider`) | `RateLimitedProvider` | 主动 TPM 限流;包装流式 provider 后仍是 `StreamingLLMProvider` |
 | `queue/task_queue` | `TaskQueue` | `FakeQueue` | `enqueue` 同步内联执行 job、`get` 查 `JobStatus`;失败记进状态(不外抛) |
 | `conformance/harness` | — | — | `ConformanceSuite` × `InvariantPack`:实现 × 不变量 笛卡尔积逐格执行(机制,无具体不变量) |

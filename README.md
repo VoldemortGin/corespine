@@ -23,16 +23,16 @@ Spine 家族的**薄共享核**(见 [ADR 0001](../docs/adr/0001-spine-family-bou
 | 模块 | 原语 |
 |---|---|
 | `seam/registry.py` | `Registry`:name→factory 解析(大小写/留白/连字符不敏感)+ entry-point 自动发现(`corespine.<seam>` group)+ 未知 spec 列清可用名 + `lazy_extra_import`(缺 extra 给"pip install …"友好提示) |
-| `observability/trace.py` | `TraceSink` 协议 + `InProcessPrivacyTraceSink`:只记 code/计数/耗时,**递归拒绝**(含嵌套)任何携带正文(answer/value/text/content…)的载荷 + 公开的 `enforce_trace_privacy` |
+| `observability/trace.py` | `TraceSink` 协议 + `InProcessPrivacyTraceSink`:只记 code/计数/耗时,**递归拒绝**(含嵌套)任何携带正文(answer/value/text/content…)的载荷(键归一防全角 / 零宽绕过,放行不可变标量,其余对象 fail-closed;报错不带数据键名)+ 公开的 `enforce_trace_privacy`;`max_events` 可选限内存 |
 | `errors.py` | `CorespineError`(稳定 `code` + `retryable`)+ `ConfigError` / `SeamError`(同时是 `ValueError`)/ `ProviderError` + `error_to_dict` |
 | `blob/store.py` | `BlobStore` 协议(key → bytes)+ `MemoryBlobStore` / `FileSystemBlobStore` 零依赖默认 + `make_blob_store` |
-| `llm/rate_limit.py` | `RateLimitedProvider`:主动 TPM 限流包装(滑动窗口);包装流式 provider 后仍满足 `StreamingLLMProvider` |
+| `llm/rate_limit.py` | `RateLimitedProvider`:主动 TPM 限流包装(滑动窗口);包装流式 provider 后实例带 `stream_chat`、仍满足 `StreamingLLMProvider`(`type(x)` 始终是 `RateLimitedProvider`) |
 | `llm/provider.py` | `LLMProvider` 协议 + 离线确定性 `MockProvider`(零网络、零 key、可复现) |
 | `config/env.py` | `load_from_env`:把 `PREFIX_*` 环境变量读进一个 frozen dataclass(范式同 ragspine `from_env`) |
 | `queue/task_queue.py` | `TaskQueue` 协议 + `FakeQueue`:同步内联执行 + 记录,离线/测试用 |
 | `conformance/harness.py` | `ConformanceSuite` × `InvariantPack`:把"实现 × 不变量"绑成笛卡尔积逐格执行(**机制**,具体不变量由各 app 自己绑) |
 | `credential/store.py` | `CredentialStore` 协议(namespace × name → secret)+ `Memory` / `InsecureLocal`(明文 + 0600)零依赖默认 + `EncryptedFile`(经 `[crypto]` extra 用 Fernet);秘密值永不入 repr/str/异常/trace |
-| `trigger/source.py` | `TriggerSource` 协议(拉模式 `poll()` → `TriggerEvent`)+ `ManualTrigger`(fire 入队/poll 排空)/ `ScheduleTrigger`(可注入时钟、固定间隔、同刻不重发)零依赖默认;payload 永不入 trace/repr |
+| `trigger/source.py` | `TriggerSource` 协议(拉模式 `poll()` → `TriggerEvent`)+ `ManualTrigger`(fire 入队/poll 排空)/ `ScheduleTrigger`(可注入时钟、固定间隔、同刻不重发;`max_catchup` + `catchup="drop_oldest"|"batch"` 可选限补发,缺省不限)零依赖默认;payload 永不入 trace/repr |
 
 ## 本地开发(始终从包根)
 

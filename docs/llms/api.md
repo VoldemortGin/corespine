@@ -59,18 +59,20 @@ emit(self, code: str, **fields: object) -> None    # 发射一条事件(code + �
 
 trace 导出面:`export(self, event: TraceEvent) -> None`。只会收到【已通过隐私校验】的事件。真实导出
 后端(OTel / Langfuse)由各 app 经可选 extra 接入,核心只给进程内收集器 `InProcessTraceExporter`
-(`.events -> list[TraceEvent]`)。
+(`InProcessTraceExporter(*, max_events: int | None = None)`;`.events -> list[TraceEvent]`、`.dropped_events`)。**缺省无界**,长驻服务请设 `max_events`(超出丢弃最旧)。
 
 ### `class InProcessPrivacyTraceSink`
 
 进程内默认 `TraceSink`:把事件存进内存列表,且**拒绝**任何携带受限内容的载荷。
 
 ```python
-InProcessPrivacyTraceSink(*, exporters: Sequence[TraceExporter] | None = None) -> None
+InProcessPrivacyTraceSink(*, exporters: Sequence[TraceExporter] | None = None,
+                          max_events: int | None = None) -> None
 
 emit(self, code: str, **fields: object) -> None
     # 先调 enforce_trace_privacy(fields)(递归,含嵌套容器),命中禁词键 / 无法检查的对象即抛
-    # TraceError、不记录不扇出;通过后深拷贝快照、本地记录,再给每个 exporter 一份独立深拷贝。
+    # TraceError、不记录不扇出;通过后本地记录,再给每个 exporter 一份独立拷贝(全标量的扁平事件
+    # 不深拷贝,含容器才深拷贝)。
     # 单个 exporter 抛错不影响其余 exporter 与调用方,只累计 exporter_failures。
 
 codes(self) -> list[str]                            # 已记录事件的 code 序列(按记录顺序)
@@ -79,15 +81,24 @@ add_exporter(self, exporter: TraceExporter) -> None # 追加扇出目标
 # 属性(只读 property)
 events -> list[TraceEvent]                          # 已记录事件的只读副本(外部改动不污染内部)
 exporter_failures -> int                            # exporter 抛错累计次数(仅计数,不含内容)
+dropped_events -> int                               # 因 max_events 上限丢弃的最旧事件数(缺省不限则为 0)
 ```
 
 ### `enforce_trace_privacy(fields: Mapping[str, object]) -> None`
 
-公开的递归隐私门(ADR 0006)。递归检查 Mapping 的键、dataclass / NamedTuple 的字段名、list /
-tuple / set 的元素;任意一层键命中 `FORBIDDEN_KEYS`(小写后精确匹配)、遇到无法检查的非标量对象、
-容器层数(含顶层)超过 `MAX_TRACE_DEPTH`(8)、访问节点数超过 `MAX_TRACE_NODES`(10000)都抛
-`TraceError`(fail-closed)。报错只给路径(如 `calls[0].prompt`),不含取值。自定义 sink 先调它即
-经同一条隐私门。
+公开的递归隐私门(ADR 0006)。递归检查 dict(含子类)/ `MappingProxyType` 的键、dataclass / NamedTuple
+的字段名、list / tuple / set 的元素;任意一层键命中 `FORBIDDEN_KEYS` 即抛 `TraceError`。
+
+- **键匹配**:键必须是 `str`(子类取真实字符串值),其它类型的键 fail-closed;比对前 NFKC 归一、去
+  Cf / Cc 字符(含零宽)、去首尾空白、casefold。
+- **放行**不可变标量叶子:`None` / `bool` / `int` / `float` / `complex` / `str` / `bytes` / `Enum` /
+  `Path`·`PurePath` / `datetime` 家族 / `Decimal` / `Fraction` / `UUID` / `range`(值内容不检查)。
+- **fail-closed**:白名单外的对象、自定义 Mapping(只认 `dict` 及子类与 `MappingProxyType`)、遍历抛错的
+  容器、层数(含顶层)超 `MAX_TRACE_DEPTH`(8)、节点数超 `MAX_TRACE_NODES`(10000)。
+- **报错**只含被命中的禁用键名与路径形状(其余键名 `<key>`、下标保留数字,如 `<key>[0].prompt`),
+  不含取值,异常的 args / context / `to_dict()` 同样不含原始键名。
+
+自定义 sink 先调它即经同一条隐私门。
 
 ### `class TraceEvent`(frozen dataclass)
 
@@ -171,9 +182,11 @@ chat(messages, *, tools=None) -> ChatCompletion      # 超出每分钟 token 预
 ```
 
 主动客户端 TPM 限流,与 SDK 的被动重试互补。`tokens_per_minute` / `window_seconds` 非正抛
-`ValueError`。**流式能力如实透传**:inner 满足 `StreamingLLMProvider` 时结果也满足它(带限流计量
-的 `stream_chat`;chunk 无 `usage` 时按约 4 字符 / token 估算);inner 只会 `chat` 时
-`isinstance(x, StreamingLLMProvider)` 为 False。两种结果都是 `RateLimitedProvider` 的实例。
+`ValueError`。**流式能力如实透传**:inner 满足 `StreamingLLMProvider` 时,实例上才带限流计量的
+`stream_chat`,故 `isinstance(x, StreamingLLMProvider)` 为真;inner 只会 `chat` 时为 False、
+`hasattr(x, "stream_chat")` 为 False。始终是同一个类(`type(x) is RateLimitedProvider`),`copy.copy` /
+`deepcopy` / pickle / 子类化都正常。chunk 无 `usage` 时按约 4 字符 / token 估算,**只统计文本部分**
+(`str` 内容与文本片段;图片等非文本片段每个固定计 32 字符,与载荷大小无关)。
 
 ## config —— `corespine.config.env`
 
@@ -185,10 +198,11 @@ chat(messages, *, tools=None) -> ChatCompletion      # 超出每分钟 token 预
 - 每个字段从 `env_key(prefix, field)` 读取;命中则按字段注解类型转换,缺失则用 dataclass 字段默认值。
 - 字段**无默认值且 env 缺失** → 抛 `ConfigError`(`ValueError` 子类,把缺失的 env 名报清楚)。
 - 支持类型:`str` / `int` / `float` / `bool` / `pathlib.Path` / `list[str]`(逗号分隔,去空白、丢空项),
-  及其 `X | None` 形式。bool:`{1,true,yes,on}` 为真、`{0,false,no,off,""}` 为假(大小写不敏感)。
+  `Literal["a", "b"]`(全为字符串字面量,取值须在其中),及其 `X | None` 形式。非可选 `Path` 遇空串抛
+  `ConfigError`。bool:`{1,true,yes,on}` 为真、`{0,false,no,off,""}` 为假(大小写不敏感)。
   `int` / `float` / `Path` / `list[str]` 的 `X | None` 遇空串得 `None`(`str | None` / `bool | None` 保持旧行为)。
 - 转型失败 / 不支持的注解(如 `int | str`、`list[int]`、`object`,仅当对应 env 存在时)抛
-  `ConfigError`,消息只含环境变量名、**不含取值**(取值可能是密钥)。`init=False` 字段不读 env。
+  `ConfigError`,消息只含环境变量名、**不含取值**(取值可能是密钥),异常在 `except` 外抛出,`__context__` 为 None。`init=False` 字段不读 env。
 - `env` 可注入(默认读 `os.environ`)——测试传入自己的 mapping,不碰进程环境。
 
 ### `env_key(prefix: str, field_name: str) -> str`
@@ -258,8 +272,8 @@ ConformanceSuite(implementations: dict[str, Factory[T]], pack: InvariantPack[T])
 cases(self) -> list[tuple[str, str]]                # 全部 (实现名, 不变量名) 组合
 ids(self) -> list[str]                              # 与 cases() 对齐的可读 id,形如 "impl-invariant"(与 parametrize_kwargs 的 ids 相同)
 check(self, impl: str, invariant: str) -> None      # 跑单格:新建该实现实例,执行该不变量(失败原样抛)
-run(self) -> list[CaseResult]                       # 跑全部格子并收集结果;Exception / pytest.fail 记失败、pytest.skip 记 skipped(passed=False),KeyboardInterrupt / SystemExit / pytest.exit 原样外抛
-passed(self) -> bool                                # 便捷:全部格子是否通过(跳过不算通过)
+run(self) -> list[CaseResult]                       # 跑全部格子并收集结果;Exception / pytest.fail / pytest.xfail 记失败、pytest.skip / unittest.SkipTest 记 skipped(按类的 __module__ 核对,同名假类不算)(passed=False),KeyboardInterrupt / SystemExit / pytest.exit 原样外抛
+passed(self) -> bool                                # 便捷:全部格子是否通过(任一失败或 skip 即 False;全是 skip 也是 False)
 
 parametrize_kwargs(self) -> dict[str, object]
     # 产出可直接喂 pytest.mark.parametrize(**...) 的 kwargs(core 不 import pytest,只返回纯数据)。
@@ -381,13 +395,18 @@ class TriggerSource(Protocol):                  # @runtime_checkable;拉模式
 TriggerEvent(trigger: str, id: str, payload: dict[str, Any] = {}, at: float = 0.0)   # frozen;repr 不含 payload
 ManualTrigger(*, trigger: str = "manual", namespace: str = "")   # fire(payload=None, *, at=0.0) -> TriggerEvent 入队;poll 排空
 ScheduleTrigger(*, interval_s: float, now_fn: Callable[[], float], trigger: str = "schedule",
-                start_at: float | None = None, max_catchup: int | None = 100)
+                start_at: float | None = None, max_catchup: int | None = None,
+                catchup: Literal["drop_oldest", "batch"] = "drop_oldest")
 make_trigger(spec: str, /, **kwargs) -> TriggerSource    # "manual" / "schedule";TRIGGER_REGISTRY
-TRIGGER_MANUAL = "manual";  TRIGGER_SCHEDULE = "schedule";  DEFAULT_MAX_CATCHUP = 100   # DEFAULT_MAX_CATCHUP 仅在 corespine.trigger / corespine.trigger.source
+TRIGGER_MANUAL = "manual";  TRIGGER_SCHEDULE = "schedule"
 ```
 
-- `ScheduleTrigger` 时钟经 `now_fn` 注入(绝不直接 `time.time()`)。一次 `poll()` 最多补发 `max_catchup`
-  个 tick:积压更多时只保留【最近】的,更早的被合并跳过且之后不再涌出;跳过数见 `.skipped_ticks`,
-  本次有跳过时首个事件 payload 带 `skipped_ticks`。传 `max_catchup=None` 恢复无限补发(大跳时线性耗时)。
+- `ScheduleTrigger` 时钟经 `now_fn` 注入(绝不直接 `time.time()`)。tick 序号对浮点稳健(按真实边界
+  时刻 + 4 ulp 相对容差,不用绝对 epsilon)。**`max_catchup` 缺省 `None` = 不限**(时钟大跳时一次 poll
+  补发全部积压,线性耗时)。显式限量时选策略:`catchup="drop_oldest"` 只保留【最近】N 个、更早的
+  **永久丢弃**(`.skipped_ticks` 累计,本次有丢弃时首个事件 payload 带 `skipped_ticks`);
+  `catchup="batch"` 每次 `poll()` 最多返回 N 个【最旧的】未发 tick、其余留给后续 poll,一个不丢
+  (对应 spinestudio 的分批补发)。`make_trigger("schedule", ...)` 透传两者。
 - `ManualTrigger` 的事件 id 只由 (trigger, namespace, 序号) 决定:同实例内唯一、可重放;跨实例 / 重启
-  同序号会重复,需不撞时传不同 `namespace`。
+  同序号会重复,需不撞时传不同 `namespace`(各部件无歧义编码,`trigger="manual:x"` 与 `namespace="x"`
+  不撞;缺省 id 与 main 逐字节一致)。

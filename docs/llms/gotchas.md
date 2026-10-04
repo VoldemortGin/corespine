@@ -29,7 +29,7 @@ text = out.choices[0].message.content  # 取文本:choices[0].message.content
 
 ## 2 · TraceSink 拒绝正文字段(隐私 by construction)
 
-`InProcessPrivacyTraceSink.emit` 会【递归】扫描载荷键(含嵌套的 dict / list / dataclass 等;无法检查的对象也拒绝),命中 `FORBIDDEN_KEYS` 就**直接抛 `TraceError` 且不
+`InProcessPrivacyTraceSink.emit` 会【递归】扫描载荷键(含嵌套的 dict / list / dataclass 等;键须是 str、比对前做 NFKC / 去零宽 / casefold;值放行不可变标量〔含 Enum / Path / datetime / Decimal / UUID〕,其它对象与自定义 Mapping 拒绝),命中 `FORBIDDEN_KEYS` 就**直接抛 `TraceError` 且不
 记录**——不是警告、不是静默丢弃,而是抛异常。
 
 ```python
@@ -106,7 +106,7 @@ Redis/OpenAI**——它没有,也永远不会有。
 - **`InvariantPack` 的不变量「通过则返回 None、违反则抛异常」**,不是返回 bool。`return c.add(3) == 3`
   是错的(返回 bool 但从不抛),要 `if c.add(3) != 3: raise AssertionError(...)`。
 - **`load_from_env` 的 `cls` 必须是 dataclass**,否则 `TypeError`;无默认值字段缺 env 抛 `ConfigError`(`ValueError` 子类);
-  转型失败(含 bool 取值不在真 / 假词表)与不支持的注解同样抛 `ConfigError`,消息只含 env 名、不含取值。
+  转型失败(含 bool 取值不在真 / 假词表、`Literal` 取值不合法、非可选 `Path` 空串)与不支持的注解同样抛 `ConfigError`,消息只含 env 名、不含取值。
 - **`FakeQueue` 的 job 失败不外抛**——被捕获记进 `JobStatus.error`(`status="failed"`)。要判成败看
   `get(jid).status` 是 `"finished"` 还是 `"failed"`,而不是靠 try/except。
 - **`error_to_dict` 吃 `BaseException`**:`CorespineError` 走其 `to_dict()`,其余异常给保守默认

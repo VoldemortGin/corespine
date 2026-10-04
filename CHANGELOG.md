@@ -15,6 +15,15 @@
 - `ScheduleTrigger` 的 tick 计算改为真除法加 epsilon,修复 `interval_s=0.1` 在 t=0.3 少发一个
   tick(晚一拍补发)的浮点问题。
 
+- **`load_from_env` 类型行为(收紧)**:
+  - 转型失败抛 `ConfigError`(仍是 `ValueError`),消息与 context 只含环境变量名、不含取值;
+  - 明确支持 `str` / `int` / `float` / `bool` / `Path` / `list[str]`(逗号分隔、去空白、丢空项)
+    及 `X | None`;`int | None` 等遇空串得 `None`(`str | None` / `bool | None` 保持旧行为);
+  - **不支持的注解(如 `int | str`、`list[int]`、`object`)在对应 env 存在时抛 `ConfigError`**,
+    不再静默塞入原始字符串(未设置 env 时不受影响);
+  - `init=False` 字段不再读 env(原先有对应 env 时 `TypeError`);
+  - `env_key("", "x")` 现为 `X`(原为 `_X`);非空前缀的行为不变。
+
 ### 新增 / 修复(按提交顺序追加)
 
 - 递归 trace 隐私门 `enforce_trace_privacy`(ADR 0006),`MAX_TRACE_DEPTH` / `MAX_TRACE_NODES`,

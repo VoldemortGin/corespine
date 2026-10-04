@@ -51,3 +51,9 @@
 - `RateLimitedProvider` 包装支持流式的 inner 时,结果现满足 `StreamingLLMProvider`(带限流计量的
   `stream_chat`;chunk 无 usage 时按约 4 字符 / token 估算);inner 不支持流式时 isinstance 仍为
   False。构造方式不变,两种结果都是 `RateLimitedProvider` 的实例。
+- credential 文件 store(`InsecureLocalCredentialStore` / `EncryptedFileCredentialStore`)读到
+  损坏文件、错 key、形状非法的内容时,统一抛 `CredentialError`(code `credential.corrupt` /
+  `credential.bad_key`),不再外泄裸 `InvalidToken` / `JSONDecodeError` / `UnicodeDecodeError` /
+  `TypeError`;异常链已断开,消息 / 属性不含明文。**注意**:此前依赖捕获裸 `InvalidToken` 的
+  调用方需改捕获 `CredentialError`(盘点三个下游均无此用法)。进程内锁不防多进程写入,已写入
+  docstring。

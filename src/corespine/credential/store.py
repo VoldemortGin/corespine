@@ -47,6 +47,16 @@ _FILE_LOCKS_GUARD = threading.Lock()
 _FILE_LOCKS: dict[str, threading.RLock] = {}
 
 
+def _is_store_shape(data: object) -> bool:
+    """是否为 {namespace: {name: str}} 形状(只校验形状,不外泄任何内容)。"""
+    return isinstance(data, dict) and all(
+        isinstance(ns, str)
+        and isinstance(bucket, dict)
+        and all(isinstance(k, str) and isinstance(v, str) for k, v in bucket.items())
+        for ns, bucket in data.items()
+    )
+
+
 def _shared_file_lock(path: Path) -> threading.RLock:
     """按不跟随最终文件 symlink 的 canonical 路径复用进程内 RLock。"""
     canonical = os.path.normcase(str(path.parent.resolve() / path.name))
@@ -135,6 +145,15 @@ class _FileCredentialStore:
     子类只需实现字节编解码钩子(_encode / _decode),据此分出「明文」与「Fernet 加密」两种落地;
     其余 set/get/delete/list 与「文件权限 0600」逻辑在此共用(避免两份近乎相同的载入/落回复制)。
     repr 只暴露落地路径(非秘密),绝不载入 / 暴露任何名字或秘密值。
+
+    【并发边界】锁是【进程内】的(同路径共用一把 RLock),只保证同进程多线程 / 多实例的
+    read-modify-write 不互相覆盖;**不防多进程**同时写同一文件(后写者会覆盖先写者的更新)。
+    需要多进程共享凭据请用真实外部 vault(entry-point 扩展),或由调用方自带跨进程互斥。
+
+    【错误归一】文件损坏(非法 JSON / 非 UTF-8 / 顶层或层级形状不对)抛 CredentialError
+    (code="credential.corrupt");加密实现遇到错 key 抛 CredentialError(code=
+    "credential.bad_key";Fernet 无法区分错 key 与密文损坏,故二者同码)。异常消息 / 属性 /
+    异常链都不含任何凭据明文。
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -206,8 +225,34 @@ class _FileCredentialStore:
                 os.close(fd)
         if not raw:
             return {}
-        data: _Store = json.loads(self._decode(raw))
-        return data
+        # 解码 / 解析失败统一归一为 CredentialError:原始异常(InvalidToken / JSONDecodeError /
+        # UnicodeDecodeError)的 doc / object 属性持有整份明文,绝不能进异常链。故在 except 块
+        # 外才 raise(__cause__ 与 __context__ 都为 None),消息与 context 只带路径。
+        data: object = None
+        code: str | None = None
+        try:
+            data = json.loads(self._decode(raw))
+        except Exception as exc:  # noqa: BLE001 — 任何解码 / 解析异常都归一,绝不外泄
+            code = (
+                "credential.bad_key"
+                if type(exc).__name__ == "InvalidToken"
+                else "credential.corrupt"
+            )
+        if code is None and not _is_store_shape(data):
+            code = "credential.corrupt"
+        if code == "credential.bad_key":
+            raise CredentialError(
+                f"凭据文件无法解密:key 错误或文件已损坏:path={str(self._path)!r}",
+                code=code,
+                path=str(self._path),
+            )
+        if code is not None:
+            raise CredentialError(
+                f"凭据文件已损坏或格式非法:path={str(self._path)!r}",
+                code=code,
+                path=str(self._path),
+            )
+        return cast("_Store", data)
 
     def _save(self, data: _Store) -> None:
         payload = self._encode(json.dumps(data, ensure_ascii=False))

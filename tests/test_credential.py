@@ -363,19 +363,6 @@ def test_encrypted_ciphertext_has_no_plaintext(tmp_path):
     assert b"api_key" not in raw  # 名字也在密文内,不泄露
 
 
-@pytest.mark.skipif(not _CRYPTO, reason="需要 corespine[crypto](cryptography)")
-def test_encrypted_wrong_key_cannot_read(tmp_path):
-    from cryptography.fernet import InvalidToken
-
-    path = tmp_path / "enc.json"
-    EncryptedFileCredentialStore(path, key=EncryptedFileCredentialStore.generate_key()).set(
-        "ns", "k", "v"
-    )
-    other = EncryptedFileCredentialStore(path, key=EncryptedFileCredentialStore.generate_key())
-    with pytest.raises(InvalidToken):
-        other.get("ns", "k")
-
-
 # --- 跨缝隐私:秘密值到不了 trace --------------------------------------------------
 
 
@@ -396,3 +383,76 @@ def test_secret_never_reaches_trace():
     with pytest.raises(TraceError):
         sink.emit("credential.get", value=_SECRET)
     assert sink.events == []
+
+
+# --- 文件损坏 / 错 key:统一为 CredentialError,且不泄露明文 --------------------------
+
+_PLAIN = "PLAINTEXT-SECRET-123"
+
+
+def _chain_texts(exc: BaseException) -> str:
+    """异常自身 + 整条链(cause / context)上所有可见文本与属性,用于断言无明文。"""
+    seen: list[str] = []
+    cur: BaseException | None = exc
+    while cur is not None:
+        seen.append(repr(cur))
+        seen.append(str(cur))
+        seen.append(repr(getattr(cur, "args", ())))
+        seen.append(repr(vars(cur)))
+        cur = cur.__cause__ or cur.__context__
+    return "\n".join(seen)
+
+
+def _assert_clean(exc: BaseException, code: str) -> None:
+    assert isinstance(exc, CredentialError)
+    assert exc.code == code
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert _PLAIN not in _chain_texts(exc)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"ns": {"k": "' + _PLAIN + '"',  # 截断的 JSON(JSONDecodeError.doc 含整份明文)
+        "not json " + _PLAIN,  # 乱码
+        '["' + _PLAIN + '"]',  # 顶层不是 dict
+        '{"ns": ["' + _PLAIN + '"]}',  # 第二层不是 dict
+        '{"ns": {"k": 5}}',  # 值不是 str
+        b"\xff\xfe" + _PLAIN.encode(),  # 非 UTF-8(UnicodeDecodeError.object 含原文)
+    ],
+)
+def test_insecure_corrupt_file_raises_credential_error_without_plaintext(tmp_path, content):
+    path = tmp_path / "c.json"
+    path.write_bytes(content if isinstance(content, bytes) else content.encode())
+    store = InsecureLocalCredentialStore(path)
+    with pytest.raises(CredentialError) as ei:
+        store.get("ns", "k")
+    _assert_clean(ei.value, "credential.corrupt")
+    for op in (lambda: store.list("ns"), lambda: store.set("ns", "n", "v")):
+        with pytest.raises(CredentialError) as ei2:
+            op()
+        _assert_clean(ei2.value, "credential.corrupt")
+
+
+@pytest.mark.skipif(not _CRYPTO, reason="需要 corespine[crypto](cryptography)")
+def test_encrypted_wrong_key_raises_bad_key_error(tmp_path):
+    path = tmp_path / "enc.json"
+    EncryptedFileCredentialStore(path, key=EncryptedFileCredentialStore.generate_key()).set(
+        "ns", "k", _PLAIN
+    )
+    other = EncryptedFileCredentialStore(path, key=EncryptedFileCredentialStore.generate_key())
+    with pytest.raises(CredentialError) as ei:
+        other.get("ns", "k")
+    _assert_clean(ei.value, "credential.bad_key")
+    assert str(ei.value)  # 原先是空消息
+
+
+@pytest.mark.skipif(not _CRYPTO, reason="需要 corespine[crypto](cryptography)")
+def test_encrypted_decrypted_but_malformed_json_is_corrupt(tmp_path):
+    key = EncryptedFileCredentialStore.generate_key()
+    path = tmp_path / "enc.json"
+    store = EncryptedFileCredentialStore(path, key=key)
+    path.write_bytes(store._encode('["' + _PLAIN + '"]'))
+    with pytest.raises(CredentialError) as ei:
+        store.get("ns", "k")
+    _assert_clean(ei.value, "credential.corrupt")

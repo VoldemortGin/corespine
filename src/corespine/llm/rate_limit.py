@@ -38,7 +38,7 @@ class RateLimitedProvider:
     为假——绝不假装支持。无论哪种,`type(wrapped) is RateLimitedProvider`:始终是同一个类,
     `isinstance` / `copy.copy` / `copy.deepcopy` / pickle / 子类化(含带额外构造参数的子类)都正常。
     copy.copy 与 main 一致(浅拷贝,共享限流窗口与锁);deepcopy / pickle 得到【独立】的限流窗口
-    (快照当前窗口记录,锁重建;inner 须自身可 deepcopy / pickle)。
+    (窗口记录随状态拷贝,锁重建;inner 须自身可 deepcopy / pickle)。
     """
 
     def __init__(
@@ -71,9 +71,8 @@ class RateLimitedProvider:
         return new
 
     def __getstate__(self) -> dict[str, Any]:
-        state = {k: v for k, v in self.__dict__.items() if k not in ("stream_chat", "_lock")}
-        state["_events"] = deque(self._events)  # 快照:deepcopy / pickle 得到独立窗口
-        return state
+        # deepcopy / pickle 会连状态一起拷贝,得到独立的窗口;锁与绑定方法不可拷贝,在 __setstate__ 重建。
+        return {k: v for k, v in self.__dict__.items() if k not in ("stream_chat", "_lock")}
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)

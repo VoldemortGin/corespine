@@ -58,14 +58,15 @@ class TriggerEvent:
     """一次外部信号产出的事件(只读):trigger 类型 code + 确定性 id + payload + 发生时刻。
 
     - trigger:产出它的 trigger 类型 code(如 "manual" / "schedule");
-    - id:确定性且唯一的事件 id(见 _event_id);
+    - id:确定性的事件 id(见 _event_id;同一实例内唯一;跨实例 / 重启是否撞见各实现的说明);
     - payload:该信号携带的 domain-neutral 数据(纯 dict;core 不解释其语义);
     - at:发生时刻(epoch 秒;ScheduleTrigger 下由注入时钟给出,假时钟即完全确定)。
     """
 
     trigger: str
     id: str
-    payload: dict[str, Any] = field(default_factory=dict)
+    # repr=False:默认 repr 会暴露 payload 正文,与本模块的隐私声明相悖。
+    payload: dict[str, Any] = field(default_factory=dict, repr=False)
     at: float = 0.0
 
 
@@ -85,12 +86,16 @@ class ManualTrigger:
     """手动 / 测试触发基座:显式 fire(payload) 入队,poll 排空(取出即消费)。
 
     离线确定性、零依赖:是「测试 / 人工触发」的最小实现,也是拉模式消费语义的参照实现。
-    每次 fire 用单调递增的序号派生事件 id——同一发火序列可重放(id 序列稳定),不同 fire
-    互异(即便 payload 相同)。repr 只暴露 pending 计数,绝不暴露任何 payload。
+    每次 fire 用单调递增的序号派生事件 id——同一发火序列可重放(id 序列稳定),【同一实例内】
+    不同 fire 互异(即便 payload 相同)。id 只由 (trigger, namespace, 序号) 决定,故【跨实例 /
+    重启后序号从 0 重来会得到相同 id】——这是离线确定性(可重放)的代价,不是「全局唯一」。
+    需要跨实例 / 重启不撞时,给每个实例传不同的 `namespace`(如实例名 / 租户名);缺省空
+    namespace 的 id 与此前完全一致。repr 只暴露 pending 计数,绝不暴露任何 payload。
     """
 
-    def __init__(self, *, trigger: str = TRIGGER_MANUAL) -> None:
+    def __init__(self, *, trigger: str = TRIGGER_MANUAL, namespace: str = "") -> None:
         self._trigger = trigger
+        self._namespace = namespace
         self._pending: list[TriggerEvent] = []
         self._seq = 0
 
@@ -98,7 +103,9 @@ class ManualTrigger:
         """入队一个事件并返回它;下次 poll 会把它(及此后入队的)一并取出。"""
         event = TriggerEvent(
             trigger=self._trigger,
-            id=_event_id(self._trigger, self._seq),
+            id=_event_id(
+                self._trigger, *((self._namespace,) if self._namespace else ()), self._seq
+            ),
             payload=dict(payload or {}),
             at=at,
         )

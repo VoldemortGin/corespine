@@ -351,3 +351,27 @@ def test_schedule_float_interval_boundary_not_late():
 def test_schedule_registry_passes_max_catchup():
     t = make_trigger("schedule", interval_s=1.0, now_fn=lambda: 0.0, max_catchup=7)
     assert isinstance(t, ScheduleTrigger)
+
+
+# --- repr 不含 payload / ManualTrigger namespace ---------------------------------------
+
+
+def test_trigger_event_repr_hides_payload():
+    event = TriggerEvent(trigger="manual", id="abc", payload={"secret": "SECRET-PAYLOAD"}, at=1.0)
+    assert "SECRET-PAYLOAD" not in repr(event) and "secret" not in repr(event)
+    assert "abc" in repr(event) and "manual" in repr(event)
+    assert event.payload == {"secret": "SECRET-PAYLOAD"}  # 数据本身不变
+
+
+def test_manual_ids_default_unchanged_and_namespace_disambiguates():
+    default_a, default_b = ManualTrigger(), ManualTrigger()
+    assert default_a.fire().id == default_b.fire().id  # 缺省:确定性可重放(与此前一致)
+    ns_a, ns_b = ManualTrigger(namespace="a"), ManualTrigger(namespace="b")
+    ids = {ns_a.fire().id, ns_b.fire().id, default_a.fire().id}
+    assert len(ids) == 3  # 命名空间不同 -> 同序号也不撞
+    assert ManualTrigger(namespace="a").fire().id == ManualTrigger(namespace="a").fire().id
+
+
+def test_manual_namespace_via_registry():
+    t = make_trigger("manual", namespace="x")
+    assert t.fire().id != ManualTrigger().fire().id  # type: ignore[attr-defined]

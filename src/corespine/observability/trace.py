@@ -14,6 +14,7 @@ domain-neutral:不预设任何具体事件 code;每个 app 用自己的 code 词
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -138,12 +139,34 @@ def enforce_trace_privacy(fields: Mapping[str, object]) -> None:
         )
 
 
+class _ReadOnlyDict(dict[str, object]):
+    """只读 dict:是 dict 的子类(json.dumps / == / isinstance 照常),但一切就地修改都抛 TypeError。
+
+    让已记录 / 已扇出的 TraceEvent.fields 无法事后被写入禁用键(绕过 emit 时的隐私校验)。
+    """
+
+    def _deny(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("TraceEvent.fields 是只读的:trace 事件记录后不可修改")
+
+    __setitem__ = __delitem__ = __ior__ = _deny  # type: ignore[assignment]
+    update = pop = popitem = clear = setdefault = _deny  # type: ignore[assignment]
+
+    def __reduce__(self) -> tuple[type[_ReadOnlyDict], tuple[dict[str, object]]]:
+        return (_ReadOnlyDict, (dict(self),))
+
+
 @dataclass(frozen=True)
 class TraceEvent:
-    """一条被记录的 trace:事件 code + 非敏感字段快照(只读)。"""
+    """一条被记录的 trace:事件 code + 非敏感字段快照(只读)。
+
+    构造时把 fields 拷贝成只读 dict(顶层不可就地修改;与调用方传入的 dict 脱钩)。
+    """
 
     code: str
     fields: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fields", _ReadOnlyDict(self.fields))
 
 
 @runtime_checkable
@@ -201,6 +224,12 @@ class InProcessPrivacyTraceSink:
     def __init__(self, *, exporters: Sequence[TraceExporter] | None = None) -> None:
         self._events: list[TraceEvent] = []
         self._exporters: list[TraceExporter] = list(exporters) if exporters else []
+        self._exporter_failures = 0
+
+    @property
+    def exporter_failures(self) -> int:
+        """exporter 抛错的累计次数(只是计数,不含异常内容 / 载荷)。"""
+        return self._exporter_failures
 
     @property
     def events(self) -> list[TraceEvent]:
@@ -219,9 +248,19 @@ class InProcessPrivacyTraceSink:
         """记一条 trace;载荷含受限字段即抛 TraceError(不记录、不扇出)。
 
         校验通过后先本地记录,再扇出到每个 exporter——扇出在校验之后,受限正文到不了导出面。
+        exporter 抛错只累计到 `exporter_failures`(不含内容),不影响其余 exporter 与调用方。
         """
         enforce_trace_privacy(fields)
-        event = TraceEvent(code=code, fields=dict(fields))
+        try:
+            snapshot = copy.deepcopy(dict(fields))
+        except Exception:  # noqa: BLE001 — 无法快照即 fail-closed,绝不放行可变共享状态
+            raise TraceError("trace 载荷无法安全快照:按可疑载荷拒绝。") from None
+        event = TraceEvent(code=code, fields=snapshot)
         self._events.append(event)
         for exporter in self._exporters:
-            exporter.export(event)
+            # 每个 exporter 拿独立的深拷贝:互不影响,也碰不到本地记录;单个 exporter 故障
+            # 只计数,不中断其余 exporter,也不冒泡给业务调用方。
+            try:
+                exporter.export(TraceEvent(code=code, fields=copy.deepcopy(dict(snapshot))))
+            except Exception:  # noqa: BLE001
+                self._exporter_failures += 1

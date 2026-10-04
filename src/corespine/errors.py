@@ -13,6 +13,29 @@ pdfspine 的 `error.kind()` / `LimitKind`——两个消费者都在各自重造
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import PurePath
+
+
+def _jsonable(value: object) -> object:
+    """把 context 里 json.dumps 无法直接序列化的值转成可序列化形式(其余原样,保持容器类型)。
+
+    PurePath -> str;set / frozenset -> 排序后的 list;其余未知类型 -> str(value)。
+    """
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, PurePath):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_jsonable(v) for v in value)
+    if isinstance(value, set | frozenset):
+        return sorted((_jsonable(v) for v in value), key=repr)
+    return str(value)
+
 
 class CorespineError(Exception):
     """Spine 家族统一异常基类。
@@ -48,7 +71,7 @@ class CorespineError(Exception):
             "code": self.code,
             "message": str(self),
             "retryable": self.retryable,
-            "context": dict(self.context),
+            "context": {str(k): _jsonable(v) for k, v in self.context.items()},
         }
 
 

@@ -167,3 +167,21 @@ def test_filesystem_key_with_slashes_is_flat_and_safe(tmp_path):
     # root 下只应有扁平文件,绝无逃逸出去的目录树。
     children = list(root.rglob("*"))
     assert all(p.is_file() for p in children)
+
+
+@pytest.mark.parametrize("bad", [5, "text", None, [1, 2, 3], 3.5])
+def test_put_rejects_non_bytes_like(tmp_path, bad):
+    for store in (MemoryBlobStore(), FileSystemBlobStore(tmp_path / "b")):
+        with pytest.raises(TypeError):
+            store.put("k", bad)
+        assert not store.exists("k")  # 被拒绝的写入不落地
+
+
+def test_put_accepts_bytes_like_and_copies(tmp_path):
+    for store in (MemoryBlobStore(), FileSystemBlobStore(tmp_path / "b2")):
+        buf = bytearray(b"abc")
+        store.put("k", buf)
+        buf[0] = 0
+        assert store.get("k") == b"abc"
+        store.put("m", memoryview(b"xyz"))
+        assert store.get("m") == b"xyz"

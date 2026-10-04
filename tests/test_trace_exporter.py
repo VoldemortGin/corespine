@@ -151,3 +151,72 @@ def test_conformance_all_exporters():
 @pytest.mark.parametrize(**SUITE.parametrize_kwargs())
 def test_conformance(case):
     case()
+
+
+# --- 事后改写 / exporter 故障隔离 ------------------------------------------------------
+
+
+def test_event_fields_cannot_be_mutated_after_emit():
+    sink = InProcessPrivacyTraceSink(exporters=[InProcessTraceExporter()])
+    sink.emit("evt", count=1)
+    event = sink.events[0]
+    with pytest.raises(TypeError):
+        event.fields["text"] = "正文"
+    with pytest.raises(TypeError):
+        event.fields.update({"text": "x"})  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        del event.fields["count"]
+    assert event.fields == {"count": 1}
+
+
+def test_emit_snapshot_is_independent_of_callers_mutable_payload():
+    sink = InProcessPrivacyTraceSink()
+    meta = {"a": 1}
+    sink.emit("evt", meta=meta)
+    meta["text"] = "后来才塞进去的正文"
+    assert sink.events[0].fields == {"meta": {"a": 1}}
+
+
+def test_exporters_do_not_share_one_event_object():
+    first, second = InProcessTraceExporter(), InProcessTraceExporter()
+    sink = InProcessPrivacyTraceSink(exporters=[first, second])
+    sink.emit("evt", stages=[1, 2])
+    sink.events[0].fields["stages"].append(3)  # 嵌套容器可变,但各方互不影响
+    assert first.events[0].fields["stages"] == [1, 2]
+    assert second.events[0].fields["stages"] == [1, 2]
+
+
+def test_traceevent_constructed_directly_is_also_readonly_and_eq_dict():
+    event = TraceEvent("c", {"n": 1})
+    assert event.fields == {"n": 1}
+    with pytest.raises(TypeError):
+        event.fields["x"] = 1
+    import json
+
+    assert json.dumps(event.fields) == '{"n": 1}'
+
+
+def test_failing_exporter_does_not_break_others_or_caller():
+    class Boom:
+        def export(self, event):
+            raise RuntimeError("exporter 挂了")
+
+    good = InProcessTraceExporter()
+    sink = InProcessPrivacyTraceSink(exporters=[Boom(), good])
+    sink.emit("evt", count=1)  # 不抛
+    sink.emit("evt2", count=2)
+    assert sink.codes() == ["evt", "evt2"]
+    assert [e.code for e in good.events] == ["evt", "evt2"]
+    assert sink.exporter_failures == 2
+    assert InProcessPrivacyTraceSink().exporter_failures == 0
+
+
+def test_exporter_failure_count_never_holds_content():
+    class Boom:
+        def export(self, event):
+            raise RuntimeError("SECRET-in-error")
+
+    sink = InProcessPrivacyTraceSink(exporters=[Boom()])
+    sink.emit("evt", count=1)
+    assert isinstance(sink.exporter_failures, int)
+    assert all("SECRET-in-error" not in repr(e) for e in sink.events)

@@ -56,6 +56,19 @@ class BlobStore(Protocol):
     def exists(self, key: str) -> bool: ...
 
 
+def _as_bytes(data: object) -> bytes:
+    """只接受 bytes-like(bytes / bytearray / memoryview),并拷贝成不可变 bytes。
+
+    `bytes(5)` 会静默得到 5 个零字节、`bytes([1, 2])` 得到 b"\\x01\\x02"——都是调用方传错类型的
+    典型坑,必须在入口拒绝而不是悄悄落地。
+    """
+    if not isinstance(data, bytes | bytearray | memoryview):
+        raise TypeError(
+            f"blob 数据必须是 bytes-like(bytes / bytearray / memoryview),收到 {type(data).__name__}"
+        )
+    return bytes(data)
+
+
 class MemoryBlobStore:
     """进程内 dict 实现:零落地、离线确定性(测试 / 临时缓存用)。"""
 
@@ -63,7 +76,7 @@ class MemoryBlobStore:
         self._data: dict[str, bytes] = {}
 
     def put(self, key: str, data: bytes) -> None:
-        self._data[key] = bytes(data)
+        self._data[key] = _as_bytes(data)
 
     def get(self, key: str) -> bytes:
         try:
@@ -97,7 +110,7 @@ class FileSystemBlobStore:
         return self._root / digest
 
     def put(self, key: str, data: bytes) -> None:
-        self._path(key).write_bytes(bytes(data))
+        self._path(key).write_bytes(_as_bytes(data))
 
     def get(self, key: str) -> bytes:
         path = self._path(key)

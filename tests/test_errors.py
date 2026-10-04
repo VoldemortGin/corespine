@@ -156,3 +156,24 @@ def test_core_raises_config_error_on_missing_required():
     assert "APP_HOST" in str(ei.value)
     with pytest.raises(ValueError):  # 既有 except ValueError 写法仍成立
         load_from_env(Cfg, prefix="APP", env={})
+
+
+def test_to_dict_with_path_context_is_json_serializable():
+    from pathlib import Path
+
+    err = ConfigError("bad", path=Path("/tmp/x"), nested={"p": Path("a")}, items=(Path("b"), 1))
+    d = err.to_dict()
+    assert json.loads(json.dumps(d))["context"]["path"] == str(Path("/tmp/x"))
+    assert d["context"]["nested"] == {"p": "a"}
+    assert d["context"]["items"] == (str(Path("b")), 1) or d["context"]["items"] == [
+        str(Path("b")),
+        1,
+    ]
+    # 原 context 不被改写(仍是 Path)。
+    assert err.context["path"] == Path("/tmp/x")
+
+
+def test_to_dict_context_other_unserializable_values_stringified():
+    d = CorespineError("x", s={3, 1}, o=object).to_dict()
+    json.dumps(d)
+    assert d["context"]["s"] == [1, 3]

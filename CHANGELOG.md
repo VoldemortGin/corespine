@@ -57,3 +57,15 @@
   `TypeError`;异常链已断开,消息 / 属性不含明文。**注意**:此前依赖捕获裸 `InvalidToken` 的
   调用方需改捕获 `CredentialError`(盘点三个下游均无此用法)。进程内锁不防多进程写入,已写入
   docstring。
+- 小口子:
+  - `TraceEvent.fields` 构造时拷贝为只读 dict(仍是 `dict` 子类,`==` / `json.dumps` 照常;就地
+    修改抛 `TypeError`);sink 扇出时每个 exporter 拿独立深拷贝。
+  - `InProcessPrivacyTraceSink`:单个 exporter 抛错不再中断其余 exporter、也不冒泡给业务调用方,
+    累计到 `exporter_failures`(仅计数)。**依赖「exporter 异常向上冒泡」的调用方需改看该计数。**
+  - `TriggerEvent` 的 repr 不再包含 payload(`payload` 数据本身不变)。
+  - `ManualTrigger` 新增 `namespace` 参数;缺省 id 与此前一致(同序号跨实例 / 重启会重复,
+    docstring 已改为准确表述,不再声称「唯一」);需要跨实例不撞时传不同 `namespace`。
+  - `CorespineError.to_dict()` 的 context 里 `Path` / `set` / 未知对象会被转成可 `json.dumps`
+    的形式(Path -> str,set -> 排序 list,其余 -> str);`error.context` 本身不变。
+  - `MemoryBlobStore.put` / `FileSystemBlobStore.put` 对非 bytes-like 输入(如 `5`、`[1, 2]`)抛
+    `TypeError`(原先 `bytes(5)` 静默存 5 个零字节);bytes / bytearray / memoryview 照常。

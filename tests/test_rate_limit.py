@@ -12,6 +12,7 @@ from corespine.llm.provider import (
     LLMProvider,
     MockProvider,
     ResponseMessage,
+    StreamingLLMProvider,
     Usage,
 )
 
@@ -95,3 +96,73 @@ def test_concurrent_calls_thread_safe():
         t.join()
     assert not errors
     assert inner.calls == 80  # 8 线程 × 10 次,全部完成
+
+
+# --- 流式能力透传 ---------------------------------------------------------------------
+
+
+def test_wrapping_streaming_inner_keeps_streaming_capability():
+    rl = RateLimitedProvider(MockProvider(), tokens_per_minute=10_000)
+    assert isinstance(rl, StreamingLLMProvider)
+    assert isinstance(rl, LLMProvider)
+    assert isinstance(rl, RateLimitedProvider)
+
+
+def test_wrapping_non_streaming_inner_does_not_pretend_to_stream():
+    rl = RateLimitedProvider(_FixedProvider(tokens=1), tokens_per_minute=10_000)
+    assert not isinstance(rl, StreamingLLMProvider)
+    assert isinstance(rl, LLMProvider)
+    assert isinstance(rl, RateLimitedProvider)
+    assert not hasattr(rl, "stream_chat")
+
+
+def test_stream_chat_passes_through_chunks_unchanged():
+    inner = MockProvider()
+    rl = RateLimitedProvider(inner, tokens_per_minute=10_000)
+    messages = [{"role": "user", "content": "你好,流式限流"}]
+    assert list(rl.stream_chat(messages)) == list(inner.stream_chat(messages))
+
+
+def test_stream_chat_is_metered_and_throttles_next_call():
+    # tpm 很小:一次流式调用的(估算)用量即用满预算,下一次 chat 必须等窗口腾出。
+    rl = RateLimitedProvider(MockProvider(), tokens_per_minute=1, window_seconds=0.2)
+    list(rl.stream_chat([{"role": "user", "content": "hello"}]))
+    start = time.monotonic()
+    rl.chat([{"role": "user", "content": "again"}])
+    assert time.monotonic() - start >= 0.15
+
+
+def test_stream_chat_uses_reported_usage_when_chunks_carry_it():
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Chunk:
+        choices: tuple = ()
+        usage: Usage | None = None
+
+    class _UsageStream:
+        def chat(self, messages, *, tools=None):
+            raise AssertionError
+
+        def stream_chat(self, messages, *, tools=None):
+            yield _Chunk()
+            yield _Chunk(usage=Usage(total_tokens=500))
+
+    rl = RateLimitedProvider(_UsageStream(), tokens_per_minute=100, window_seconds=0.2)
+    list(rl.stream_chat([{"role": "user", "content": "x"}]))
+    assert rl._used_tokens(time.monotonic()) == 500
+
+
+def test_stream_chat_gate_blocks_when_over_budget():
+    rl = RateLimitedProvider(MockProvider(), tokens_per_minute=1, window_seconds=0.2)
+    rl.chat([{"role": "user", "content": "a"}])  # 用满预算
+    start = time.monotonic()
+    list(rl.stream_chat([{"role": "user", "content": "b"}]))
+    assert time.monotonic() - start >= 0.15
+
+
+def test_non_streaming_chat_behaviour_unchanged_on_streaming_wrapper():
+    inner = MockProvider()
+    rl = RateLimitedProvider(inner, tokens_per_minute=10_000)
+    msgs = [{"role": "user", "content": "hi"}]
+    assert rl.chat(msgs) == inner.chat(msgs)

@@ -48,3 +48,6 @@
 - `ConfigError` / `SeamError` 现同时继承 `ValueError`,核心在未知 spec(`Registry.make` 及
   `make_*`,`SeamError`,context 含 `seam` / `spec`)与缺必填 env(`load_from_env`,
   `ConfigError`,context 含 `key`)处改抛它们;既有 `except ValueError` 不受影响。
+- `RateLimitedProvider` 包装支持流式的 inner 时,结果现满足 `StreamingLLMProvider`(带限流计量的
+  `stream_chat`;chunk 无 usage 时按约 4 字符 / token 估算);inner 不支持流式时 isinstance 仍为
+  False。构造方式不变,两种结果都是 `RateLimitedProvider` 的实例。

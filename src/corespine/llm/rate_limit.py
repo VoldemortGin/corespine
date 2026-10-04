@@ -12,9 +12,15 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
 from typing import Any
 
-from corespine.llm.provider import ChatCompletion, LLMProvider
+from corespine.llm.provider import (
+    ChatCompletion,
+    ChatCompletionChunk,
+    LLMProvider,
+    StreamingLLMProvider,
+)
 
 
 class RateLimitedProvider:
@@ -26,7 +32,17 @@ class RateLimitedProvider:
     【事后累计】——token 用量须等响应才知道,故为软限流:并发下可能小幅超额,但长期收敛到上限。
 
     与 provider SDK 的 max_retries 互补:SDK 撞 429 后被动退避,本包装器预先主动节流。
+
+    【流式能力如实透传】inner 同时满足 StreamingLLMProvider 时,`RateLimitedProvider(...)` 实际
+    构造出本类的子类(带 `stream_chat`,同样限流计量),故 `isinstance(wrapped,
+    StreamingLLMProvider)` 为真;inner 只会 chat 时则不带 stream_chat、isinstance 为假——
+    绝不假装支持。构造方式不变,两种结果都满足 `isinstance(x, RateLimitedProvider)`。
     """
+
+    def __new__(cls, inner: LLMProvider, **kwargs: Any) -> RateLimitedProvider:
+        if cls is RateLimitedProvider and isinstance(inner, StreamingLLMProvider):
+            cls = _StreamingRateLimitedProvider
+        return super().__new__(cls)
 
     def __init__(
         self, inner: LLMProvider, *, tokens_per_minute: int, window_seconds: float = 60.0
@@ -49,25 +65,65 @@ class RateLimitedProvider:
             self._events.popleft()
         return sum(tokens for _, tokens in self._events)
 
-    def chat(
-        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None
-    ) -> ChatCompletion:
-        """限流后转发给 inner.chat;超出每分钟预算时阻塞等待至窗口腾出空间。"""
-        # 阻塞等待:窗口内已用达上限就 sleep 到最老记录过期再重查;预算够则放行。
-        # sleep 不持锁(避免串行化所有线程);每轮重新取锁判断当前预算。
+    def _acquire(self) -> None:
+        """阻塞等待:窗口内已用达上限就 sleep 到最老记录过期再重查;预算够则放行。
+
+        sleep 不持锁(避免串行化所有线程);每轮重新取锁判断当前预算。
+        """
         while True:
             with self._lock:
                 now = time.monotonic()
                 if self._used_tokens(now) < self._tpm:
-                    break
+                    return
                 wait = (self._events[0][0] + self._window) - now
             if wait > 0:
                 time.sleep(wait)
 
-        result = self._inner.chat(messages, tools=tools)
-
-        # 事后累计本次 token 用量(usage 可能为 None,记 0)。
-        tokens = result.usage.total_tokens if result.usage is not None else 0
+    def _record(self, tokens: int) -> None:
         with self._lock:
             self._events.append((time.monotonic(), tokens))
+
+    def chat(
+        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None
+    ) -> ChatCompletion:
+        """限流后转发给 inner.chat;超出每分钟预算时阻塞等待至窗口腾出空间。"""
+        self._acquire()
+        result = self._inner.chat(messages, tools=tools)
+        # 事后累计本次 token 用量(usage 可能为 None,记 0)。
+        self._record(result.usage.total_tokens if result.usage is not None else 0)
         return result
+
+
+def _chars_to_tokens(chars: int) -> int:
+    """无 usage 可用时的粗略估算:约 4 字符 / token(向上取整)。"""
+    return (chars + 3) // 4
+
+
+class _StreamingRateLimitedProvider(RateLimitedProvider):
+    """inner 支持流式时的包装类:在 RateLimitedProvider 之上叠加 `stream_chat`(见其 docstring)。
+
+    token 计量:chunk 若携带 `usage`(如开启 stream usage 的 OpenAI 兼容后端)就用其
+    total_tokens;否则按「提示词 + 已吐出内容」的字符数粗估(约 4 字符 / token)——流式 chunk
+    协议本身不带用量,估算是软限流下的诚实近似。迭代被中途放弃时,按已消费部分计量。
+    """
+
+    def stream_chat(
+        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None
+    ) -> Iterator[ChatCompletionChunk]:
+        """限流(首次迭代时检查预算,必要时阻塞)后转发给 inner.stream_chat,并事后计量。"""
+        self._acquire()
+        inner = self._inner
+        assert isinstance(inner, StreamingLLMProvider)  # __new__ 已保证
+        out_chars = 0
+        reported = 0
+        try:
+            for chunk in inner.stream_chat(messages, tools=tools):
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    reported = max(reported, usage.total_tokens)
+                for choice in chunk.choices:
+                    out_chars += len(choice.delta.content or "")
+                yield chunk
+        finally:
+            in_chars = sum(len(str(m.get("content") or "")) for m in messages)
+            self._record(reported or _chars_to_tokens(in_chars + out_chars))

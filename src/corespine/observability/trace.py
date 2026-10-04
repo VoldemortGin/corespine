@@ -16,8 +16,17 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime
+import decimal
+import enum
+import fractions
+import functools
+import types
+import unicodedata
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import PurePath
 from typing import Protocol, runtime_checkable
 
 from corespine.errors import CorespineError
@@ -51,99 +60,230 @@ FORBIDDEN_KEYS = frozenset(
 MAX_TRACE_DEPTH = 8
 MAX_TRACE_NODES = 10_000
 
-# 允许直接出现在 trace 里的标量叶子(bool 是 int 子类;StrEnum / IntEnum 成员按 str / int 放行)。
-_SCALARS = (str, bytes, int, float, bool, type(None))
+# 允许直接出现在 trace 里的【不可变标量叶子】白名单(子类按其基类处理,如 StrEnum / IntEnum /
+# str 子类)。放行标量不等于放行正文:隐私门按【键名】把关,值的内容本来就不检查。
+# 白名单之外的不可检查对象(自定义类实例、生成器、bytearray、memoryview ...)仍 fail-closed。
+_LEAF_TYPES = (
+    type(None),
+    bool,
+    int,
+    float,
+    complex,
+    str,
+    bytes,
+    enum.Enum,
+    PurePath,
+    datetime.date,  # datetime.datetime 是其子类
+    datetime.time,
+    datetime.timedelta,
+    decimal.Decimal,
+    fractions.Fraction,
+    uuid.UUID,
+    range,
+)
 
 
 class TraceError(CorespineError):
     """trace 载荷违反隐私约定(携带受限正文 / 取值字段)时抛出。
 
     继承家族统一基类 CorespineError,带稳定可 grep 的 code,便于跨缝统一捕获 / 归一。
+    消息只含被命中的禁用键名(来自固定集合)与路径的形状(见 enforce_trace_privacy),
+    绝不含用户数据键名 / 取值;异常的属性与 to_dict() 同样不含它们。
     """
 
     code = "trace.forbidden"
 
 
-def _children(value: object, path: str, offending: list[str]) -> list[tuple[str, object]] | None:
-    """展开一层容器:返回 (路径, 子值) 列表并收集禁词键;标量返回 None;其余对象 fail-closed。
+@functools.lru_cache(maxsize=4096)
+def _normalize_key(key: str) -> str:
+    """键归一:NFKC(全角 -> 半角)、去 Unicode 格式 / 控制字符(Cf / Cc,含零宽字符)、
+    去首尾空白、casefold。仅用于与 FORBIDDEN_KEYS 比对。"""
+    folded = unicodedata.normalize("NFKC", key)
+    kept = "".join(c for c in folded if unicodedata.category(c) not in ("Cf", "Cc"))
+    return kept.strip().casefold()
 
-    - Mapping:按键检查,路径 `x.key`;
-    - dataclass 实例(不含类本身):按字段名当键检查;
-    - NamedTuple(有 `_asdict` 的 tuple):先 `_asdict()`,按字段名当键检查;
-    - list / tuple:逐元素,路径 `x[i]`;set / frozenset:逐元素,路径 `x{*}`(无序,无下标)。
-    """
-    if isinstance(value, _SCALARS):
-        return None
-    if isinstance(value, tuple) and hasattr(value, "_asdict"):
-        value = value._asdict()
-    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-        value = {f.name: getattr(value, f.name) for f in dataclasses.fields(value)}
-    if isinstance(value, Mapping):
-        items: list[tuple[str, object]] = []
-        for key, item in value.items():
-            key_path = f"{path}.{key}" if path else str(key)
-            if str(key).strip().lower() in FORBIDDEN_KEYS:
-                offending.append(key_path)
-            items.append((key_path, item))
-        return items
-    if isinstance(value, list | tuple):
-        return [(f"{path}[{i}]", item) for i, item in enumerate(value)]
-    if isinstance(value, set | frozenset):
-        return [(f"{path}{{*}}", item) for item in value]
-    raise TraceError(
-        f"trace 载荷含无法检查的非标量值({path}:{type(value).__qualname__}):只允许 str / bytes / "
-        "int / float / bool / None 及 Mapping / list / tuple / set / dataclass / NamedTuple "
-        "容器,其余一律拒绝。"
+
+class _Scan:
+    """一次隐私扫描的共享状态。"""
+
+    __slots__ = ("budget", "flat", "offending")
+
+    def __init__(self) -> None:
+        self.offending: list[str] = []
+        self.budget = MAX_TRACE_NODES
+        self.flat = True  # 除顶层外没遇到任何容器 -> 可走快路径
+
+
+def _reject_uninspectable(path: str, value: object) -> TraceError:
+    return TraceError(
+        f"trace 载荷含无法检查的非标量值({path or '<root>'}:{type(value).__qualname__}):只允许"
+        "不可变标量(None / bool / int / float / complex / str / bytes / Enum / Path / "
+        "datetime 家族 / Decimal / Fraction / UUID / range)及 dict / MappingProxyType / list / "
+        "tuple / set / dataclass / NamedTuple 容器,其余一律拒绝。"
     )
 
 
-def enforce_trace_privacy(fields: Mapping[str, object]) -> None:
-    """隐私门:载荷任意一层的键命中 FORBIDDEN_KEYS 即抛 TraceError(归一小写后精确匹配)。
+def _copy_value(value: object, path: str, depth: int, st: _Scan) -> object:
+    """叶子原样返回(不可变);容器递归校验并返回【独立的干净拷贝】。"""
+    if isinstance(value, _LEAF_TYPES):
+        return value
+    st.flat = False
+    return _guarded_expand(value, path, depth, st)
 
-    递归检查 Mapping 的键、dataclass / NamedTuple 的字段名,并逐元素深入 list / tuple / set;
-    无法检查的非标量对象(含遍历时抛错的容器)fail-closed 拒绝;容器层数(含顶层)超过
-    MAX_TRACE_DEPTH、或访问节点数超过 MAX_TRACE_NODES 按可疑载荷拒绝(自引用结构也由此挡下)。
-    报错给出路径(如 `calls[0].prompt`)而【不】含取值。
 
-    默认 sink 的 emit 先调用它;自定义 / OTel sink 只要先调用它,就经同一条隐私门——扇出而不绕过。
-    与 ragspine `enforce_trace_privacy`(ADR 0028)语义兼容,下游可直接改用本函数。
+def _guarded_expand(value: object, path: str, depth: int, st: _Scan) -> object:
+    failed = False
+    try:
+        return _expand(value, path, depth, st)
+    except TraceError:
+        raise
+    except Exception:  # noqa: BLE001 — 任何遍历异常都按无法检查 fail-closed
+        failed = True
+    # 在 except 块外抛:异常上下文里不留下原始异常(它可能带数据)。
+    assert failed
+    raise TraceError(
+        f"trace 载荷无法安全遍历({path or '<root>'}:{type(value).__qualname__}):按可疑载荷拒绝。"
+    )
+
+
+def _expand(value: object, path: str, depth: int, st: _Scan) -> object:
+    """展开一层容器,校验键并返回拷贝。
+
+    - dict(含子类,按其【真实内容】读取,不信任被覆写的 items / __iter__)与 MappingProxyType:
+      按键检查,拷贝为普通 dict;其它自定义 Mapping 一律 fail-closed(其内容可被覆写欺骗);
+    - dataclass 实例(不含类本身):按字段名当键检查;NamedTuple:按字段名当键检查;
+    - list / tuple:逐元素,路径 `x[i]`;set / frozenset:逐元素,路径 `x{*}`(无序,无下标)。
+    键必须是 str(子类取其真实字符串值,不信任 __str__),其它类型的键 fail-closed。
     """
-    offending: list[str] = []
-    budget = [MAX_TRACE_NODES]
-    # 显式栈,避免对抗输入打爆 Python 递归深度;(值, 路径, 层数)。
-    stack: list[tuple[object, str, int]] = [(fields, "", 1)]
-    while stack:
-        value, path, depth = stack.pop()
-        try:
-            items = _children(value, path, offending)
-        except TraceError:
-            raise
-        except Exception:  # noqa: BLE001 — 任何遍历异常都按无法检查 fail-closed
-            raise TraceError(
-                f"trace 载荷无法安全遍历({path or '<root>'}:{type(value).__qualname__}):按可疑载荷拒绝。"
-            ) from None
-        if items is None:
-            continue
-        if depth > MAX_TRACE_DEPTH:
-            raise TraceError(
-                f"trace 载荷嵌套超过 {MAX_TRACE_DEPTH} 层({path}):按可疑载荷拒绝,不截断放行。"
-            )
-        budget[0] -= len(items)
-        if budget[0] < 0:
-            raise TraceError(f"trace 载荷节点数超过 {MAX_TRACE_NODES}:按可疑载荷拒绝,不截断放行。")
-        stack.extend((item, item_path, depth + 1) for item_path, item in items)
-    if offending:
+    pairs: list[tuple[object, object]] | None = None
+    seq: list[object] | None = None
+    if isinstance(value, dict):
+        pairs = list(dict.items(value))
+    elif isinstance(value, types.MappingProxyType):
+        inner = value.copy()
+        if not isinstance(inner, dict):
+            raise _reject_uninspectable(path, value)
+        pairs = list(dict.items(inner))
+    elif isinstance(value, tuple) and hasattr(value, "_asdict"):
+        as_dict = value._asdict()
+        if not isinstance(as_dict, dict):
+            raise _reject_uninspectable(path, value)
+        pairs = list(dict.items(as_dict))
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        pairs = [(f.name, getattr(value, f.name)) for f in dataclasses.fields(value)]
+    elif isinstance(value, list):
+        seq = list(list.__iter__(value))
+    elif isinstance(value, tuple):
+        seq = list(tuple.__iter__(value))
+    elif isinstance(value, set):
+        seq = list(set.__iter__(value))
+    elif isinstance(value, frozenset):
+        seq = list(frozenset.__iter__(value))
+    else:
+        raise _reject_uninspectable(path, value)
+
+    if depth > MAX_TRACE_DEPTH:
         raise TraceError(
-            f"trace 载荷含受限字段 {sorted(offending)}:trace 只记 code / 计数 / 耗时,"
+            f"trace 载荷嵌套超过 {MAX_TRACE_DEPTH} 层({path}):按可疑载荷拒绝,不截断放行。"
+        )
+    st.budget -= len(pairs) if pairs is not None else len(seq or ())
+    if st.budget < 0:
+        raise TraceError(f"trace 载荷节点数超过 {MAX_TRACE_NODES}:按可疑载荷拒绝,不截断放行。")
+
+    if seq is not None:
+        if isinstance(value, list | tuple):
+            copied = [
+                _copy_value(item, f"{path}[{i}]", depth + 1, st) for i, item in enumerate(seq)
+            ]
+            return copied if isinstance(value, list) else tuple(copied)
+        set_path = f"{path}{{*}}"
+        members = [_copy_value(item, set_path, depth + 1, st) for item in seq]
+        return frozenset(members) if isinstance(value, frozenset) else set(members)
+
+    assert pairs is not None
+    result: dict[str, object] = {}
+    for key, item in pairs:
+        if not isinstance(key, str):
+            raise TraceError(
+                f"trace 载荷含非 str 键({path or '<root>'}:{type(key).__qualname__}):按可疑载荷拒绝。"
+            )
+        real = key if type(key) is str else str.__str__(key)
+        norm = _normalize_key(real)
+        if norm in FORBIDDEN_KEYS:
+            seg = norm  # 来自固定集合,可安全展示
+            st.offending.append(f"{path}.{seg}" if path else seg)
+        else:
+            seg = "<key>"
+        if isinstance(item, _LEAF_TYPES):
+            result[real] = item
+        else:
+            st.flat = False
+            result[real] = _guarded_expand(item, f"{path}.{seg}" if path else seg, depth + 1, st)
+
+    if isinstance(value, tuple):  # NamedTuple
+        return value._make(result.values())  # type: ignore[attr-defined]
+    if dataclasses.is_dataclass(value):
+        clone = copy.deepcopy(value)
+        for name, item in result.items():
+            object.__setattr__(clone, name, item)
+        return clone
+    return result
+
+
+def _sanitize(fields: Mapping[str, object]) -> tuple[dict[str, object], bool]:
+    """隐私校验 + 取独立拷贝(单次物化,校验的就是将被扇出的);返回 (拷贝, 是否全标量扁平)。"""
+    st = _Scan()
+    snapshot = _guarded_expand(fields, "", 1, st)
+    if st.offending:
+        raise TraceError(
+            f"trace 载荷含受限字段 {sorted(st.offending)}:trace 只记 code / 计数 / 耗时,"
             "不得携带答案正文 / 字段取值 / chunk 正文。"
         )
+    assert isinstance(snapshot, dict)
+    return snapshot, st.flat
+
+
+def enforce_trace_privacy(fields: Mapping[str, object]) -> None:
+    """隐私门:载荷任意一层的键命中 FORBIDDEN_KEYS 即抛 TraceError。
+
+    键匹配:键必须是 `str`(子类取其真实字符串值,不信任 `__str__`),其它类型的键 fail-closed;
+    比对前做 NFKC 归一(全角 -> 半角)、去 Unicode 格式 / 控制字符(Cf / Cc,含零宽字符)、
+    去首尾空白、casefold。
+
+    递归检查 dict(含子类)/ `MappingProxyType` 的键、dataclass / NamedTuple 的字段名,并逐元素
+    深入 list / tuple / set。**放行**的值:不可变标量叶子——None / bool / int / float / complex /
+    str / bytes / Enum 成员 / Path 与 PurePath / datetime 家族(datetime / date / time /
+    timedelta)/ Decimal / Fraction / UUID / range(子类按基类);值的内容不检查,隐私门只按键名把关。
+    **fail-closed**:白名单外的对象(自定义类实例、生成器、bytearray ...)、自定义 Mapping(其
+    `items()` 可被覆写欺骗)、非 str 键、遍历时抛错的容器;容器层数(含顶层)超过
+    MAX_TRACE_DEPTH、或访问节点数超过 MAX_TRACE_NODES 也按可疑载荷拒绝(自引用结构由此挡下)。
+
+    报错只含【被命中的禁用键名】(来自固定集合)与路径的形状:其余键名用 `<key>` 占位、序列
+    下标保留数字(如 `<key>[0].prompt`),所以以用户数据(问题、文档名)作 dict 键也不会进日志;
+    绝不含取值。异常的 args / context / to_dict() 同样如此。
+
+    默认 sink 的 emit 先调用它(同一次扫描产出独立拷贝再扇出);自定义 / OTel sink 只要先调用它,
+    就经同一条隐私门。与 ragspine `enforce_trace_privacy`(ADR 0028)语义兼容,下游可直接改用本函数
+    (路径里非禁用键名变为 `<key>` 占位)。
+    """
+    _sanitize(fields)
 
 
 class _ReadOnlyDict(dict[str, object]):
     """只读 dict:是 dict 的子类(json.dumps / == / isinstance 照常),但一切就地修改都抛 TypeError。
 
     让已记录 / 已扇出的 TraceEvent.fields 无法事后被写入禁用键(绕过 emit 时的隐私校验)。
+    覆写了 `__init__` 的重复调用;**防误用,不防恶意**:`dict.__setitem__(f, ...)` 这类直接调用
+    基类方法的绕过在 Python 里挡不住。exporter 拿到的始终是独立拷贝,改它不影响本地记录。
     """
+
+    __slots__ = ("_sealed",)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        if getattr(self, "_sealed", False):
+            self._deny()
+        super().__init__(*args, **kwargs)
+        self._sealed = True
 
     def _deny(self, *args: object, **kwargs: object) -> None:
         raise TypeError("TraceEvent.fields 是只读的:trace 事件记录后不可修改")
@@ -250,17 +390,16 @@ class InProcessPrivacyTraceSink:
         校验通过后先本地记录,再扇出到每个 exporter——扇出在校验之后,受限正文到不了导出面。
         exporter 抛错只累计到 `exporter_failures`(不含内容),不影响其余 exporter 与调用方。
         """
-        enforce_trace_privacy(fields)
-        try:
-            snapshot = copy.deepcopy(dict(fields))
-        except Exception:  # noqa: BLE001 — 无法快照即 fail-closed,绝不放行可变共享状态
-            raise TraceError("trace 载荷无法安全快照:按可疑载荷拒绝。") from None
-        event = TraceEvent(code=code, fields=snapshot)
+        # 单次扫描同时完成校验与取独立拷贝(含容器时才递归 / 深拷贝;全标量的扁平事件走快路径)。
+        snapshot, flat = _sanitize(fields)
+        event = TraceEvent(code=code, fields=snapshot)  # TraceEvent 构造时再浅拷贝一层
         self._events.append(event)
         for exporter in self._exporters:
-            # 每个 exporter 拿独立的深拷贝:互不影响,也碰不到本地记录;单个 exporter 故障
-            # 只计数,不中断其余 exporter,也不冒泡给业务调用方。
+            # 每个 exporter 拿独立拷贝:互不影响,也碰不到本地记录;单个 exporter 故障
+            # 只计数,不中断其余 exporter,也不冒泡给业务调用方。扁平事件的值全是不可变标量,
+            # TraceEvent 的浅拷贝即独立;含容器才深拷贝。
             try:
-                exporter.export(TraceEvent(code=code, fields=copy.deepcopy(dict(snapshot))))
+                payload = snapshot if flat else copy.deepcopy(snapshot)
+                exporter.export(TraceEvent(code=code, fields=payload))
             except Exception:  # noqa: BLE001
                 self._exporter_failures += 1

@@ -33,16 +33,13 @@ class RateLimitedProvider:
 
     与 provider SDK 的 max_retries 互补:SDK 撞 429 后被动退避,本包装器预先主动节流。
 
-    【流式能力如实透传】inner 同时满足 StreamingLLMProvider 时,`RateLimitedProvider(...)` 实际
-    构造出本类的子类(带 `stream_chat`,同样限流计量),故 `isinstance(wrapped,
-    StreamingLLMProvider)` 为真;inner 只会 chat 时则不带 stream_chat、isinstance 为假——
-    绝不假装支持。构造方式不变,两种结果都满足 `isinstance(x, RateLimitedProvider)`。
+    【流式能力如实透传】inner 同时满足 StreamingLLMProvider 时,实例上才带 `stream_chat`(同样限流
+    计量),故 `isinstance(wrapped, StreamingLLMProvider)` 为真;inner 只会 chat 时不带、isinstance
+    为假——绝不假装支持。无论哪种,`type(wrapped) is RateLimitedProvider`:始终是同一个类,
+    `isinstance` / `copy.copy` / `copy.deepcopy` / pickle / 子类化(含带额外构造参数的子类)都正常。
+    copy.copy 与 main 一致(浅拷贝,共享限流窗口与锁);deepcopy / pickle 得到【独立】的限流窗口
+    (快照当前窗口记录,锁重建;inner 须自身可 deepcopy / pickle)。
     """
-
-    def __new__(cls, inner: LLMProvider, **kwargs: Any) -> RateLimitedProvider:
-        if cls is RateLimitedProvider and isinstance(inner, StreamingLLMProvider):
-            cls = _StreamingRateLimitedProvider
-        return super().__new__(cls)
 
     def __init__(
         self, inner: LLMProvider, *, tokens_per_minute: int, window_seconds: float = 60.0
@@ -57,6 +54,31 @@ class RateLimitedProvider:
         self._lock = threading.Lock()
         # 滑动窗口内的 (monotonic 时刻, token 数);只保留过去 window_seconds 的记录。
         self._events: deque[tuple[float, int]] = deque()
+        self._expose_stream()
+
+    def _expose_stream(self) -> None:
+        """inner 支持流式时,把 `stream_chat` 挂到【实例】上(类上没有,故 inner 不支持时
+        `hasattr` / runtime_checkable 的 isinstance 如实为假)。绑定到当前实例。"""
+        if isinstance(self._inner, StreamingLLMProvider):
+            self.__dict__["stream_chat"] = self._stream_chat
+        else:
+            self.__dict__.pop("stream_chat", None)
+
+    def __copy__(self) -> RateLimitedProvider:
+        new = object.__new__(type(self))
+        new.__dict__.update(self.__dict__)  # 与 main 一致:浅拷贝,共享限流窗口与锁
+        new._expose_stream()  # stream_chat 要绑到新实例,而不是旧的
+        return new
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = {k: v for k, v in self.__dict__.items() if k not in ("stream_chat", "_lock")}
+        state["_events"] = deque(self._events)  # 快照:deepcopy / pickle 得到独立窗口
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+        self._expose_stream()
 
     def _used_tokens(self, now: float) -> int:
         """清理窗口外旧记录,返回窗口内已用 token 之和(调用方须持锁)。"""
@@ -92,6 +114,34 @@ class RateLimitedProvider:
         # 事后累计本次 token 用量(usage 可能为 None,记 0)。
         self._record(result.usage.total_tokens if result.usage is not None else 0)
         return result
+
+    def _stream_chat(
+        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None
+    ) -> Iterator[ChatCompletionChunk]:
+        """(经实例属性 `stream_chat` 暴露)限流后转发给 inner.stream_chat,并事后计量。
+
+        首次迭代时检查预算(必要时阻塞)。token 计量:chunk 若携带 `usage`(如开启 stream usage 的
+        OpenAI 兼容后端)就用其 total_tokens;否则按「提示词 + 已吐出内容」的字符数粗估(约 4 字符 /
+        token)——流式 chunk 协议本身不带用量,估算是软限流下的诚实近似。输入只统计【文本部分】
+        (见 `_estimate_input_chars`:多模态的图片等非文本片段按固定小常数计,与载荷大小无关)。
+        迭代被中途放弃时,按已消费部分计量。
+        """
+        self._acquire()
+        inner = self._inner
+        assert isinstance(inner, StreamingLLMProvider)  # _expose_stream 已保证
+        out_chars = 0
+        reported = 0
+        try:
+            for chunk in inner.stream_chat(messages, tools=tools):
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    reported = max(reported, usage.total_tokens)
+                for choice in chunk.choices:
+                    out_chars += len(choice.delta.content or "")
+                yield chunk
+        finally:
+            in_chars = _estimate_input_chars(messages)
+            self._record(reported or _chars_to_tokens(in_chars + out_chars))
 
 
 def _chars_to_tokens(chars: int) -> int:
@@ -130,34 +180,3 @@ def _estimate_input_chars(messages: list[dict[str, Any]]) -> int:
         else:
             total += _NON_TEXT_PART_CHARS
     return total
-
-
-class _StreamingRateLimitedProvider(RateLimitedProvider):
-    """inner 支持流式时的包装类:在 RateLimitedProvider 之上叠加 `stream_chat`(见其 docstring)。
-
-    token 计量:chunk 若携带 `usage`(如开启 stream usage 的 OpenAI 兼容后端)就用其
-    total_tokens;否则按「提示词 + 已吐出内容」的字符数粗估(约 4 字符 / token)——流式 chunk
-    协议本身不带用量,估算是软限流下的诚实近似。输入只统计【文本部分】(见 `_estimate_input_chars`:
-    多模态的图片等非文本片段按固定小常数计,与载荷大小无关)。迭代被中途放弃时,按已消费部分计量。
-    """
-
-    def stream_chat(
-        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None
-    ) -> Iterator[ChatCompletionChunk]:
-        """限流(首次迭代时检查预算,必要时阻塞)后转发给 inner.stream_chat,并事后计量。"""
-        self._acquire()
-        inner = self._inner
-        assert isinstance(inner, StreamingLLMProvider)  # __new__ 已保证
-        out_chars = 0
-        reported = 0
-        try:
-            for chunk in inner.stream_chat(messages, tools=tools):
-                usage = getattr(chunk, "usage", None)
-                if usage is not None:
-                    reported = max(reported, usage.total_tokens)
-                for choice in chunk.choices:
-                    out_chars += len(choice.delta.content or "")
-                yield chunk
-        finally:
-            in_chars = _estimate_input_chars(messages)
-            self._record(reported or _chars_to_tokens(in_chars + out_chars))

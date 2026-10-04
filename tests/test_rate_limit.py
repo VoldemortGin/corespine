@@ -216,3 +216,63 @@ def test_stream_estimate_counts_text_parts_and_str_content():
         == 100
     )
     assert _stream_estimate([{"role": "user", "content": None}]) == 0
+
+
+# --- 构造方式:type / isinstance / copy / pickle / 子类化都正常 -----------------------------
+
+
+def test_type_is_exactly_rate_limited_provider_for_both_kinds_of_inner():
+    assert type(RateLimitedProvider(MockProvider(), tokens_per_minute=10)) is RateLimitedProvider
+    assert type(RateLimitedProvider(_FixedProvider(1), tokens_per_minute=10)) is RateLimitedProvider
+
+
+def test_copy_copy_works_and_keeps_stream_bound_to_the_copy():
+    import copy
+
+    streaming = RateLimitedProvider(MockProvider(), tokens_per_minute=10_000)
+    dup = copy.copy(streaming)
+    assert type(dup) is RateLimitedProvider and isinstance(dup, StreamingLLMProvider)
+    assert dup.stream_chat.__self__ is dup  # type: ignore[attr-defined]
+    assert list(dup.stream_chat([{"role": "user", "content": "hi"}]))
+
+    plain = copy.copy(RateLimitedProvider(_FixedProvider(1), tokens_per_minute=10))
+    assert isinstance(plain, LLMProvider) and not isinstance(plain, StreamingLLMProvider)
+
+
+def test_deepcopy_and_pickle_round_trip():
+    import copy
+    import pickle
+
+    rl = RateLimitedProvider(MockProvider(), tokens_per_minute=10_000, window_seconds=30.0)
+    rl.chat([{"role": "user", "content": "hi"}])
+    for dup in (copy.deepcopy(rl), pickle.loads(pickle.dumps(rl))):
+        assert type(dup) is RateLimitedProvider
+        assert isinstance(dup, StreamingLLMProvider)
+        assert dup._tpm == 10_000 and dup._window == 30.0
+        assert len(dup._events) == 1 and dup._events is not rl._events
+        assert dup.stream_chat.__self__ is dup  # type: ignore[attr-defined]
+        dup.chat([{"role": "user", "content": "again"}])  # 锁可用
+        assert len(rl._events) == 1  # 原对象不受影响
+
+    plain = pickle.loads(pickle.dumps(RateLimitedProvider(_FixedProvider(1), tokens_per_minute=5)))
+    assert type(plain) is RateLimitedProvider
+    assert not isinstance(plain, StreamingLLMProvider) and not hasattr(plain, "stream_chat")
+
+
+def test_subclass_with_extra_positional_init_args_and_isinstance():
+    class Sub(RateLimitedProvider):
+        def __init__(self, inner, tpm, label):
+            super().__init__(inner, tokens_per_minute=tpm)
+            self.label = label
+
+    sub = Sub(MockProvider(), 5_000, "x")
+    assert type(sub) is Sub and sub.label == "x"
+    assert isinstance(sub, StreamingLLMProvider) and isinstance(sub, RateLimitedProvider)
+    assert list(sub.stream_chat([{"role": "user", "content": "hi"}]))
+    plain = Sub(_FixedProvider(1), 5_000, "y")
+    assert not isinstance(plain, StreamingLLMProvider)
+
+
+def test_inner_keyword_construction():
+    rl = RateLimitedProvider(inner=MockProvider(), tokens_per_minute=10)
+    assert isinstance(rl, StreamingLLMProvider)

@@ -317,13 +317,15 @@ def test_schedule_within_cap_has_no_skipped_marker():
     assert t.skipped_ticks == 0
 
 
-def test_schedule_default_max_catchup_is_finite():
-    from corespine.trigger.source import DEFAULT_MAX_CATCHUP
-
+def test_schedule_default_is_unbounded_like_main():
+    # 缺省 max_catchup=None(不限,与 main 一致):小规模下全部补发、无跳过、无 skipped 标记。
     clock = {"t": 0.0}
     t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0)
-    clock["t"] = 1_000_000.0
-    assert len(t.poll()) == DEFAULT_MAX_CATCHUP
+    clock["t"] = 250.0
+    events = t.poll()
+    assert [e.payload["tick"] for e in events] == list(range(1, 251))
+    assert t.skipped_ticks == 0
+    assert all("skipped_ticks" not in e.payload for e in events)
 
 
 def test_schedule_max_catchup_none_restores_unbounded():
@@ -348,9 +350,145 @@ def test_schedule_float_interval_boundary_not_late():
     assert [e.payload["tick"] for e in t.poll()] == [1, 2, 3]
 
 
-def test_schedule_registry_passes_max_catchup():
-    t = make_trigger("schedule", interval_s=1.0, now_fn=lambda: 0.0, max_catchup=7)
+def test_schedule_registry_passes_max_catchup_and_catchup():
+    clock = {"t": 0.0}
+    t = make_trigger(
+        "schedule", interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=7
+    )
     assert isinstance(t, ScheduleTrigger)
+    clock["t"] = 100.0
+    assert [e.payload["tick"] for e in t.poll()] == list(range(94, 101))  # drop_oldest 缺省
+    assert t.skipped_ticks == 93
+
+    b = make_trigger(
+        "schedule",
+        interval_s=1.0,
+        now_fn=lambda: clock["t"],
+        start_at=0.0,
+        max_catchup=7,
+        catchup="batch",
+    )
+    assert [e.payload["tick"] for e in b.poll()] == list(range(1, 8))  # batch:最旧的 7 个
+    assert b.skipped_ticks == 0
+
+
+def test_schedule_catchup_validation():
+    with pytest.raises(ValueError):
+        ScheduleTrigger(interval_s=1.0, now_fn=lambda: 0.0, catchup="nope")  # type: ignore[arg-type]
+
+
+# --- catchup="batch":分批补发、不丢 tick ----------------------------------------------
+
+
+def test_schedule_batch_mode_catches_up_exactly_in_bounded_batches():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(
+        interval_s=1.0,
+        now_fn=lambda: clock["t"],
+        start_at=0.0,
+        max_catchup=100,
+        catchup="batch",
+    )
+    clock["t"] = 1050.0  # 一次大跳:1050 个 tick 待补
+    seen: list[int] = []
+    sizes: list[int] = []
+    while batch := t.poll():
+        sizes.append(len(batch))
+        seen.extend(e.payload["tick"] for e in batch)
+    assert seen == list(range(1, 1051))  # 恰好补完、不丢、不重、有序
+    assert max(sizes) <= 100 and sizes == [100] * 10 + [50]
+    assert t.skipped_ticks == 0
+    assert t.poll() == []
+    clock["t"] = 1052.0  # 补完后正常推进
+    assert [e.payload["tick"] for e in t.poll()] == [1051, 1052]
+
+
+def test_schedule_batch_mode_new_ticks_queue_behind_backlog():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(
+        interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=3, catchup="batch"
+    )
+    clock["t"] = 5.0
+    assert [e.payload["tick"] for e in t.poll()] == [1, 2, 3]
+    clock["t"] = 7.0  # 又来了新 tick;仍从最旧的未发 tick 继续
+    assert [e.payload["tick"] for e in t.poll()] == [4, 5, 6]
+    assert [e.payload["tick"] for e in t.poll()] == [7]
+
+
+def test_schedule_batch_mode_big_jump_is_fast_per_poll():
+    import time
+
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(
+        interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=100, catchup="batch"
+    )
+    clock["t"] = 2_000_000.0
+    started = time.perf_counter()
+    assert len(t.poll()) == 100
+    assert time.perf_counter() - started < 0.5
+
+
+def test_schedule_batch_mode_without_max_catchup_is_unbounded():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, catchup="batch")
+    clock["t"] = 300.0
+    assert len(t.poll()) == 300
+
+
+def test_schedule_drop_oldest_skip_count_is_observable_across_polls():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(
+        interval_s=1.0,
+        now_fn=lambda: clock["t"],
+        start_at=0.0,
+        max_catchup=10,
+        catchup="drop_oldest",
+    )
+    clock["t"] = 100.0
+    first = t.poll()
+    assert first[0].payload["skipped_ticks"] == 90 and t.skipped_ticks == 90
+    clock["t"] = 300.0
+    second = t.poll()
+    assert second[0].payload["skipped_ticks"] == 190 and t.skipped_ticks == 280
+
+
+# --- tick 计算对浮点稳健:真实量级时间戳,不漏发 / 不重发 / 不提前 ---------------------------
+
+
+@pytest.mark.parametrize("interval", [0.1, 1.0, 3600.0])
+@pytest.mark.parametrize("anchor", [0.0, 1.7e9, 1_700_000_000.123])
+def test_schedule_steps_tick_by_tick_without_miss_dup_or_early(interval, anchor):
+    clock = {"t": anchor}
+    t = ScheduleTrigger(interval_s=interval, now_fn=lambda: clock["t"], start_at=anchor)
+    ids: list[str] = []
+    for k in range(1, 2001):
+        clock["t"] = anchor + k * interval  # 恰好到达第 k 个边界
+        events = t.poll()
+        assert [e.payload["tick"] for e in events] == [k], (interval, anchor, k)
+        ids.extend(e.id for e in events)
+        assert t.poll() == []  # 同刻不重发
+    assert len(set(ids)) == 2000
+
+
+@pytest.mark.parametrize("interval", [0.1, 1.0, 3600.0])
+def test_schedule_never_fires_early_at_real_timestamp_magnitude(interval):
+    anchor = 1.7e9
+    clock = {"t": anchor}
+    t = ScheduleTrigger(interval_s=interval, now_fn=lambda: clock["t"], start_at=anchor)
+    boundary = anchor + interval
+    clock["t"] = boundary - 3e-6  # 差 3 微秒(远大于该量级的几个 ulp):不得发火
+    assert t.poll() == []
+    clock["t"] = boundary
+    assert [e.payload["tick"] for e in t.poll()] == [1]
+
+
+@pytest.mark.parametrize("interval", [0.1, 1.0, 3600.0])
+def test_schedule_big_jump_at_real_magnitude_counts_exact_ticks(interval):
+    anchor = 1.7e9
+    clock = {"t": anchor}
+    t = ScheduleTrigger(interval_s=interval, now_fn=lambda: clock["t"], start_at=anchor)
+    clock["t"] = anchor + 1000 * interval
+    assert [e.payload["tick"] for e in t.poll()] == list(range(1, 1001))
 
 
 # --- repr 不含 payload / ManualTrigger namespace ---------------------------------------

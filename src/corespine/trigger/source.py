@@ -27,9 +27,10 @@ ScheduleTrigger 每个时刻窗口(tick)只发一次,同一时刻重复 poll 不
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from corespine.seam.registry import Registry
 
@@ -37,10 +38,10 @@ from corespine.seam.registry import Registry
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULE = "schedule"
 
-# ScheduleTrigger 单次 poll 最多补发的 tick 数缺省值。依据:覆盖进程短暂停顿 / 轮询间隔抖动下
-# 的正常补发(100 个窗口),又把「start_at=0 配真实墙钟」或「休眠很久后恢复」的补发量卡在
-# 常数级(原先 200 万 tick 单次 poll 需 73 秒)。与 spinestudio 的 MAX_SCHEDULE_CATCH_UP 同值。
-DEFAULT_MAX_CATCHUP = 100
+# tick 边界比较的相对容差(ulp 数,按时间戳量级取 math.ulp):吸收 `k * interval` 与手写时间字面量
+# 之间的浮点舍入误差(如 3 * 0.1 == 0.30000000000000004 对 0.3),又不让量级 1.7e9 的时间戳
+# 提前约微秒级发火。
+_TICK_TOLERANCE_ULPS = 4
 
 
 def _event_id(trigger: str, *parts: object) -> str:
@@ -132,11 +133,22 @@ class ScheduleTrigger:
 
     事件 id 由边界时刻派生 -> 同一 (anchor, interval, 时钟序列) 可完全重放。
 
-    【补发上限 max_catchup】一次 poll 最多补发这么多个 tick(缺省 DEFAULT_MAX_CATCHUP);
-    积压更多时只保留【最近】的 max_catchup 个,更早的被合并跳过,状态直接前移到当前(下一次
-    poll 不会再涌出旧 tick)。被跳过的 tick 数可观察:累计值见 `skipped_ticks` 属性,本次
-    poll 若发生跳过,首个事件的 payload 带 `skipped_ticks`(仅计数,不含内容)。
-    传 `max_catchup=None` 恢复旧的「无限补发」行为(大跳时耗时与内存随跳跃量线性增长)。
+    【补发上限 max_catchup / 策略 catchup】缺省 `max_catchup=None`:不限,时钟大跳时一次 poll
+    补发全部积压 tick(与此前行为一致;大跳时耗时与内存随跳跃量线性增长)。需要限量时显式选一种
+    策略,二者语义【不同】:
+
+    - `catchup="drop_oldest"`(缺省策略):一次 poll 只保留【最近】的 `max_catchup` 个 tick,
+      更早的被合并跳过并【永久丢弃】(状态直接前移到当前,之后不再涌出)。适合「只关心最新」。
+      丢弃数可观察:累计值见 `skipped_ticks`,本次有丢弃时首个事件的 payload 带 `skipped_ticks`。
+      注意:长期持有同一实例的调用方在积压超过上限时会【丢 tick】,请按需选择。
+    - `catchup="batch"`:一次 poll 最多返回 `max_catchup` 个【最旧的】未发 tick,状态只前移到已返回
+      的位置,其余留给后续 poll——大跳后连续多次 poll 恰好补完全部 tick、一个不丢、每次有界。
+      `skipped_ticks` 恒为 0。适合「必须补齐」(如按批消费积压)。
+
+    tick 序号的计算对浮点稳健:以锚点为原点,取「使 `anchor + k*interval` 不晚于 now」的最大 k,
+    边界比较用 `_TICK_TOLERANCE_ULPS` 个 ulp(按时间戳量级)的相对容差,而不用绝对 epsilon;
+    故既不会因 `3*0.1 != 0.3` 漏发,量级 1.7e9 的时间戳也不会提前发火(至多提前数个 ulp,
+    即该量级下不到 1 微秒,比 now 自身的分辨率还小)。
     """
 
     def __init__(
@@ -146,13 +158,17 @@ class ScheduleTrigger:
         now_fn: Callable[[], float],
         trigger: str = TRIGGER_SCHEDULE,
         start_at: float | None = None,
-        max_catchup: int | None = DEFAULT_MAX_CATCHUP,
+        max_catchup: int | None = None,
+        catchup: Literal["drop_oldest", "batch"] = "drop_oldest",
     ) -> None:
         if interval_s <= 0:
             raise ValueError(f"interval_s 必须为正:{interval_s!r}")
         if max_catchup is not None and max_catchup < 1:
             raise ValueError(f"max_catchup 必须 >= 1(或 None 表示不限):{max_catchup!r}")
+        if catchup not in ("drop_oldest", "batch"):
+            raise ValueError(f"catchup 只能是 'drop_oldest' 或 'batch':{catchup!r}")
         self._max_catchup = max_catchup
+        self._catchup = catchup
         self._skipped = 0
         self._interval = float(interval_s)
         self._now = now_fn
@@ -160,21 +176,43 @@ class ScheduleTrigger:
         self._anchor = float(start_at) if start_at is not None else float(now_fn())
         self._last_tick = 0  # 已发火到的 tick 序号(0 = 仅锚点,尚未发过)
 
+    def _tick_time(self, tick: int) -> float:
+        return self._anchor + tick * self._interval
+
+    def _due(self, tick: int, now: float) -> bool:
+        """第 tick 个边界是否已到(含 _TICK_TOLERANCE_ULPS 个 ulp 的相对容差)。"""
+        boundary = self._tick_time(tick)
+        return boundary <= now + _TICK_TOLERANCE_ULPS * math.ulp(max(abs(now), abs(boundary)))
+
+    def _current_tick(self, now: float) -> int:
+        """已到的最大 tick 序号(锚点之前 / 当刻为 0)。"""
+        elapsed = now - self._anchor
+        if elapsed <= 0:
+            return 0
+        tick = int(elapsed / self._interval)  # 估计值,下面按真实边界时刻修正(至多差 1)
+        while self._due(tick + 1, now):
+            tick += 1
+        while tick > 0 and not self._due(tick, now):
+            tick -= 1
+        return tick
+
     def poll(self) -> list[TriggerEvent]:
         now = float(self._now())
-        elapsed = now - self._anchor
-        # 已跨过的整数个 interval 边界(锚点之前 / 当刻均为 0,不发火)。用真除法加微小 epsilon
-        # 而非浮点整除:0.3 // 0.1 == 2.0 会让边界晚一拍,0.3 / 0.1 + 1e-9 则正确得到 3。
-        current_tick = int(elapsed / self._interval + 1e-9) if elapsed > 0 else 0
+        current_tick = self._current_tick(now)
         first_tick = self._last_tick + 1
         skipped = 0
-        if self._max_catchup is not None and current_tick - self._last_tick > self._max_catchup:
-            skipped = current_tick - self._last_tick - self._max_catchup
-            first_tick += skipped
-            self._skipped += skipped
+        last_tick = current_tick  # 本次发到哪个 tick(batch 模式可能小于 current_tick)
+        backlog = current_tick - self._last_tick
+        if self._max_catchup is not None and backlog > self._max_catchup:
+            if self._catchup == "batch":
+                last_tick = self._last_tick + self._max_catchup
+            else:
+                skipped = backlog - self._max_catchup
+                first_tick += skipped
+                self._skipped += skipped
         events: list[TriggerEvent] = []
-        for tick in range(first_tick, current_tick + 1):
-            tick_time = self._anchor + tick * self._interval
+        for tick in range(first_tick, last_tick + 1):
+            tick_time = self._tick_time(tick)
             payload: dict[str, Any] = {"tick": tick, "scheduled_at": tick_time}
             if skipped and tick == first_tick:
                 payload["skipped_ticks"] = skipped
@@ -186,8 +224,8 @@ class ScheduleTrigger:
                     at=tick_time,
                 )
             )
-        if current_tick > self._last_tick:
-            self._last_tick = current_tick  # 取出即消费:窗口一旦观测即不再重发
+        if last_tick > self._last_tick:
+            self._last_tick = last_tick  # 取出即消费:窗口一旦观测即不再重发
         return events
 
     @property
@@ -208,7 +246,8 @@ def _make_schedule(
     now_fn: Callable[[], float],
     trigger: str = TRIGGER_SCHEDULE,
     start_at: float | None = None,
-    max_catchup: int | None = DEFAULT_MAX_CATCHUP,
+    max_catchup: int | None = None,
+    catchup: Literal["drop_oldest", "batch"] = "drop_oldest",
 ) -> ScheduleTrigger:
     """schedule 工厂:要求显式 interval_s 与注入时钟 now_fn(离线默认不猜真实墙钟)。"""
     return ScheduleTrigger(
@@ -217,6 +256,7 @@ def _make_schedule(
         trigger=trigger,
         start_at=start_at,
         max_catchup=max_catchup,
+        catchup=catchup,
     )
 
 

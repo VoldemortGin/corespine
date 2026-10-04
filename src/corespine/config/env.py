@@ -8,13 +8,14 @@ env mapping,不碰进程环境)。但本助手是 domain-neutral 的:不预设�
 支持的字段类型(其余注解在【对应 env 存在时】fail-closed 抛 ConfigError,绝不静默塞字符串):
 
 - `str`;`int`;`float`;`bool`:{1,true,yes,on} 为真、{0,false,no,off,""} 为假(大小写不敏感);
-- `pathlib.Path`;
+- `pathlib.Path`(非可选字段遇空串抛 ConfigError,不静默成当前目录);
+- `Literal["a", "b"]`(全为字符串字面量):取值须在其中,否则抛 ConfigError;
 - `list[str]`:以【逗号】分隔,各项去首尾空白、丢弃空项,空串得 `[]`;
 - 以上任一的 `X | None` 可选形式:env 为空串时,`int` / `float` / `Path` / `list[str]` 得
   None(list 得 [])——`str | None` 与 `bool | None` 为兼容旧行为,空串仍分别得 "" / False。
 
 转型失败抛 ConfigError(ValueError 子类),消息与 context 只含【环境变量名】,绝不含取值
-(取值可能是密钥),并以 `from None` 断开异常链。未声明默认值的字段若缺对应 env,同样抛
+(取值可能是密钥);异常在 except 块【外】抛出,`__context__` / `__cause__` 都为 None。未声明默认值的字段若缺对应 env,同样抛
 ConfigError。`init=False` 的字段不读 env、交给 dataclass 自身。
 """
 
@@ -25,7 +26,7 @@ import os
 import types
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Union, get_args, get_origin, get_type_hints
+from typing import Literal, Union, get_args, get_origin, get_type_hints
 
 from corespine.errors import ConfigError
 
@@ -58,9 +59,19 @@ def _type_name(tp: object) -> str:
     return getattr(tp, "__qualname__", None) or str(tp)
 
 
+def _literal_strs(tp: object) -> tuple[str, ...] | None:
+    """`Literal["a", "b"]`(全是字符串字面量)-> ("a", "b");其余 None。"""
+    if get_origin(tp) is Literal:
+        args = get_args(tp)
+        if args and all(isinstance(a, str) for a in args):
+            return tuple(args)
+    return None
+
+
 def _coerce(raw: str, tp: object, key: str) -> object:
     """按目标类型把 env 字符串转成值;不支持的类型 / 转型失败抛 ConfigError(只带 env 名)。"""
     base, optional = _unwrap_optional(tp)
+    problem: str | None = None  # 失败只记一句不含取值的话,退出 except 之后再抛
     try:
         if base is str:
             return raw
@@ -70,23 +81,35 @@ def _coerce(raw: str, tp: object, key: str) -> object:
                 return True
             if low in _FALSE:
                 return False
-            raise ValueError
-        if base is int or base is float or base is Path:
+            problem = f"无法解析为 {_type_name(base)}"
+        elif base is int or base is float or base is Path:
             if optional and raw == "":
                 return None
-            return base(raw)
-        if _is_str_list(base):
+            if base is Path and raw == "":
+                problem = "不能是空路径(空串会静默指向当前目录)"
+            else:
+                return base(raw)
+        elif _is_str_list(base):
             if optional and raw == "":
                 return None
             return [item.strip() for item in raw.split(",") if item.strip()]
+        elif (choices := _literal_strs(base)) is not None:
+            if optional and raw == "":
+                return None
+            if raw in choices:
+                return raw
+            problem = f"取值不在允许范围 {list(choices)} 内"
+        else:
+            problem = (
+                f"对应字段的注解 {tp!r} 不受支持:仅支持 str / int / float / bool / Path / "
+                "list[str] / Literal[字符串字面量] 及其 `X | None` 形式"
+            )
     except ValueError:
-        # 不带取值、不串联原异常:int("abc") 一类的原消息会回显取值,取值可能是密钥。
-        raise ConfigError(f"环境变量 {key} 无法解析为 {_type_name(base)}", key=key) from None
-    raise ConfigError(
-        f"环境变量 {key} 对应字段的注解 {tp!r} 不受支持:仅支持 str / int / float / bool / Path / "
-        "list[str] 及其 `X | None` 形式",
-        key=key,
-    )
+        problem = f"无法解析为 {_type_name(base)}"
+    # 在 except 块【外】抛:`from None` 只是不显示原异常,__context__ 里仍会留着 int() 的原始
+    # 报错(含环境变量的取值,可能是密钥);这里 __context__ / __cause__ 都为 None。
+    assert problem is not None
+    raise ConfigError(f"环境变量 {key} {problem}", key=key)
 
 
 def load_from_env[T](cls: type[T], *, prefix: str, env: Mapping[str, str] | None = None) -> T:

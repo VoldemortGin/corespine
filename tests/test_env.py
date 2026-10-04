@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -83,7 +84,7 @@ def test_conversion_error_names_env_var_but_not_value():
     assert "APP_WORKERS" in str(ei.value)
     assert "s3cr3t-abc" not in str(ei.value)
     assert "s3cr3t-abc" not in repr(ei.value.context)
-    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+    assert ei.value.__cause__ is None and ei.value.__context__ is None
     assert isinstance(ei.value, ValueError)  # 既有 except ValueError 仍成立
 
 
@@ -170,3 +171,61 @@ def test_empty_prefix_has_no_leading_underscore():
     assert env_key("APP", "x") == "APP_X"
     cfg = load_from_env(DemoConfig, prefix="", env={"WORKERS": "3"})
     assert cfg.workers == 3
+
+
+def test_no_exception_context_carries_the_secret_value():
+    # `from None` 只是不显示原异常,__context__ 里仍会是 int() 的原始报错(带取值);必须真的没有。
+    for cls, env in (
+        (DemoConfig, {"APP_WORKERS": "sk-SECRET"}),
+        (DemoConfig, {"APP_DEBUG": "sk-SECRET"}),
+        (DemoConfig, {"APP_RATE": "sk-SECRET"}),
+    ):
+        with pytest.raises(ConfigError) as ei:
+            load_from_env(cls, prefix="APP", env=env)
+        err: BaseException | None = ei.value
+        while err is not None:  # 沿异常链(cause / context)查,任何一环都不得含取值
+            assert "sk-SECRET" not in str(err) and "sk-SECRET" not in repr(err)
+            err = err.__cause__ or err.__context__
+        assert ei.value.__context__ is None and ei.value.__cause__ is None
+
+
+def test_required_path_empty_string_is_config_error_not_cwd():
+    with pytest.raises(ConfigError) as ei:
+        load_from_env(RichConfig, prefix="R", env={"R_ROOT": ""})
+    assert "R_ROOT" in str(ei.value)
+    assert ei.value.__context__ is None
+    # 可选 Path 空串仍是 None;非空照常。
+    assert load_from_env(RichConfig, prefix="R", env={"R_WHERE": ""}).where is None
+    assert load_from_env(RichConfig, prefix="R", env={"R_ROOT": "x"}).root == Path("x")
+
+
+@dataclass(frozen=True)
+class ModeConfig:
+    mode: Literal["fast", "slow"] = "fast"
+    opt: Literal["a", "b"] | None = None
+
+
+def test_literal_str_values_supported_and_validated():
+    assert load_from_env(ModeConfig, prefix="M", env={"M_MODE": "slow"}).mode == "slow"
+    assert load_from_env(ModeConfig, prefix="M", env={}).mode == "fast"
+    with pytest.raises(ConfigError) as ei:
+        load_from_env(ModeConfig, prefix="M", env={"M_MODE": "sk-SECRET"})
+    assert "M_MODE" in str(ei.value) and "sk-SECRET" not in str(ei.value)
+    assert "fast" in str(ei.value) and "slow" in str(ei.value)  # 合法取值来自代码,可以列出
+    assert ei.value.__context__ is None
+    assert load_from_env(ModeConfig, prefix="M", env={"M_OPT": ""}).opt is None
+    assert load_from_env(ModeConfig, prefix="M", env={"M_OPT": "b"}).opt == "b"
+
+
+def test_literal_non_str_and_tuple_fields_still_rejected():
+    @dataclass(frozen=True)
+    class IntLit:
+        v: Literal[1, 2] = 1
+
+    @dataclass(frozen=True)
+    class Tup:
+        v: tuple[str, ...] = ()
+
+    for cls in (IntLit, Tup):
+        with pytest.raises(ConfigError):
+            load_from_env(cls, prefix="P", env={"P_V": "1"})

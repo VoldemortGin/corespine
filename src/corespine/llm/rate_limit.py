@@ -99,12 +99,46 @@ def _chars_to_tokens(chars: int) -> int:
     return (chars + 3) // 4
 
 
+# 非文本内容片段(图片 / 音频 / 文件等)估算时按的固定字符数:不看其载荷大小(base64 图片可达数百
+# KB,按字符估会把 tpm 撑爆),只给一个确定性的小常数。
+_NON_TEXT_PART_CHARS = 32
+
+
+def _estimate_input_chars(messages: list[dict[str, Any]]) -> int:
+    """估算输入消息的「文本字符数」(确定性,与多模态载荷大小无关)。
+
+    - `content` 是 `str`:按其长度;`None` / 缺省:0;
+    - `content` 是 list:`str` 片段与 `{"type": "text", "text": ...}` 片段按文本长度累计,
+      其它类型的片段(图片 / 音频 / 文件 ...)每个固定计 `_NON_TEXT_PART_CHARS`;
+    - 其它类型的 `content`:同样按一个非文本片段计。
+    """
+    total = 0
+    for m in messages:
+        content = m.get("content")
+        if content is None:
+            continue
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, str):
+                    total += len(part)
+                elif isinstance(part, dict) and part.get("type") == "text":
+                    total += len(part.get("text") or "")
+                else:
+                    total += _NON_TEXT_PART_CHARS
+        else:
+            total += _NON_TEXT_PART_CHARS
+    return total
+
+
 class _StreamingRateLimitedProvider(RateLimitedProvider):
     """inner 支持流式时的包装类:在 RateLimitedProvider 之上叠加 `stream_chat`(见其 docstring)。
 
     token 计量:chunk 若携带 `usage`(如开启 stream usage 的 OpenAI 兼容后端)就用其
     total_tokens;否则按「提示词 + 已吐出内容」的字符数粗估(约 4 字符 / token)——流式 chunk
-    协议本身不带用量,估算是软限流下的诚实近似。迭代被中途放弃时,按已消费部分计量。
+    协议本身不带用量,估算是软限流下的诚实近似。输入只统计【文本部分】(见 `_estimate_input_chars`:
+    多模态的图片等非文本片段按固定小常数计,与载荷大小无关)。迭代被中途放弃时,按已消费部分计量。
     """
 
     def stream_chat(
@@ -125,5 +159,5 @@ class _StreamingRateLimitedProvider(RateLimitedProvider):
                     out_chars += len(choice.delta.content or "")
                 yield chunk
         finally:
-            in_chars = sum(len(str(m.get("content") or "")) for m in messages)
+            in_chars = _estimate_input_chars(messages)
             self._record(reported or _chars_to_tokens(in_chars + out_chars))

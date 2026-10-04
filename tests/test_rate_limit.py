@@ -166,3 +166,53 @@ def test_non_streaming_chat_behaviour_unchanged_on_streaming_wrapper():
     rl = RateLimitedProvider(inner, tokens_per_minute=10_000)
     msgs = [{"role": "user", "content": "hi"}]
     assert rl.chat(msgs) == inner.chat(msgs)
+
+
+# --- 流式估算只统计文本,不被多模态大载荷放大 ------------------------------------------
+
+
+class _SilentStream:
+    """只吐一个空 chunk 的流式 inner(不带 usage),让估算只取决于输入消息。"""
+
+    def chat(self, messages, *, tools=None):
+        raise AssertionError
+
+    def stream_chat(self, messages, *, tools=None):
+        return iter(())
+
+
+def _stream_estimate(messages) -> int:
+    rl = RateLimitedProvider(_SilentStream(), tokens_per_minute=10**9)
+    list(rl.stream_chat(messages))
+    return rl._used_tokens(time.monotonic())
+
+
+def _image_msg(size: int, text: str = "describe"):
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * size}},
+            ],
+        }
+    ]
+
+
+def test_stream_estimate_is_independent_of_image_size():
+    small, big = _stream_estimate(_image_msg(10)), _stream_estimate(_image_msg(400_000))
+    assert small == big
+    assert big < 100  # 绝不是约 10 万 token 的量级
+
+
+def test_stream_estimate_counts_text_parts_and_str_content():
+    assert _stream_estimate([{"role": "user", "content": "x" * 400}]) == 100
+    assert _stream_estimate(_image_msg(10, text="y" * 400)) > _stream_estimate(
+        _image_msg(10, text="")
+    )
+    # 文本片段按字符数计:多 400 字符 = 多 100 token。
+    assert (
+        _stream_estimate(_image_msg(10, text="y" * 400)) - _stream_estimate(_image_msg(10, text=""))
+        == 100
+    )
+    assert _stream_estimate([{"role": "user", "content": None}]) == 0

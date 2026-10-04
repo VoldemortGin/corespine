@@ -37,6 +37,11 @@ from corespine.seam.registry import Registry
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULE = "schedule"
 
+# ScheduleTrigger 单次 poll 最多补发的 tick 数缺省值。依据:覆盖进程短暂停顿 / 轮询间隔抖动下
+# 的正常补发(100 个窗口),又把「start_at=0 配真实墙钟」或「休眠很久后恢复」的补发量卡在
+# 常数级(原先 200 万 tick 单次 poll 需 73 秒)。与 spinestudio 的 MAX_SCHEDULE_CATCH_UP 同值。
+DEFAULT_MAX_CATCHUP = 100
+
 
 def _event_id(trigger: str, *parts: object) -> str:
     """据 trigger code + 判别部件产出确定性、唯一的事件 id(纯函数,可重放)。
@@ -119,6 +124,12 @@ class ScheduleTrigger:
     时钟跳跃跨过多个边界时,按边界逐个补发(「发现了 N 个新窗口」)。不实现任何真实 cron 守护。
 
     事件 id 由边界时刻派生 -> 同一 (anchor, interval, 时钟序列) 可完全重放。
+
+    【补发上限 max_catchup】一次 poll 最多补发这么多个 tick(缺省 DEFAULT_MAX_CATCHUP);
+    积压更多时只保留【最近】的 max_catchup 个,更早的被合并跳过,状态直接前移到当前(下一次
+    poll 不会再涌出旧 tick)。被跳过的 tick 数可观察:累计值见 `skipped_ticks` 属性,本次
+    poll 若发生跳过,首个事件的 payload 带 `skipped_ticks`(仅计数,不含内容)。
+    传 `max_catchup=None` 恢复旧的「无限补发」行为(大跳时耗时与内存随跳跃量线性增长)。
     """
 
     def __init__(
@@ -128,9 +139,14 @@ class ScheduleTrigger:
         now_fn: Callable[[], float],
         trigger: str = TRIGGER_SCHEDULE,
         start_at: float | None = None,
+        max_catchup: int | None = DEFAULT_MAX_CATCHUP,
     ) -> None:
         if interval_s <= 0:
             raise ValueError(f"interval_s 必须为正:{interval_s!r}")
+        if max_catchup is not None and max_catchup < 1:
+            raise ValueError(f"max_catchup 必须 >= 1(或 None 表示不限):{max_catchup!r}")
+        self._max_catchup = max_catchup
+        self._skipped = 0
         self._interval = float(interval_s)
         self._now = now_fn
         self._trigger = trigger
@@ -140,22 +156,37 @@ class ScheduleTrigger:
     def poll(self) -> list[TriggerEvent]:
         now = float(self._now())
         elapsed = now - self._anchor
-        # 已跨过的整数个 interval 边界(锚点之前 / 当刻均为 0,不发火)。
-        current_tick = int(elapsed // self._interval) if elapsed > 0 else 0
+        # 已跨过的整数个 interval 边界(锚点之前 / 当刻均为 0,不发火)。用真除法加微小 epsilon
+        # 而非浮点整除:0.3 // 0.1 == 2.0 会让边界晚一拍,0.3 / 0.1 + 1e-9 则正确得到 3。
+        current_tick = int(elapsed / self._interval + 1e-9) if elapsed > 0 else 0
+        first_tick = self._last_tick + 1
+        skipped = 0
+        if self._max_catchup is not None and current_tick - self._last_tick > self._max_catchup:
+            skipped = current_tick - self._last_tick - self._max_catchup
+            first_tick += skipped
+            self._skipped += skipped
         events: list[TriggerEvent] = []
-        for tick in range(self._last_tick + 1, current_tick + 1):
+        for tick in range(first_tick, current_tick + 1):
             tick_time = self._anchor + tick * self._interval
+            payload: dict[str, Any] = {"tick": tick, "scheduled_at": tick_time}
+            if skipped and tick == first_tick:
+                payload["skipped_ticks"] = skipped
             events.append(
                 TriggerEvent(
                     trigger=self._trigger,
                     id=_event_id(self._trigger, tick_time),
-                    payload={"tick": tick, "scheduled_at": tick_time},
+                    payload=payload,
                     at=tick_time,
                 )
             )
         if current_tick > self._last_tick:
             self._last_tick = current_tick  # 取出即消费:窗口一旦观测即不再重发
         return events
+
+    @property
+    def skipped_ticks(self) -> int:
+        """因 max_catchup 截断而被跳过(未发出)的 tick 累计数。"""
+        return self._skipped
 
     def __repr__(self) -> str:
         return (
@@ -170,9 +201,16 @@ def _make_schedule(
     now_fn: Callable[[], float],
     trigger: str = TRIGGER_SCHEDULE,
     start_at: float | None = None,
+    max_catchup: int | None = DEFAULT_MAX_CATCHUP,
 ) -> ScheduleTrigger:
     """schedule 工厂:要求显式 interval_s 与注入时钟 now_fn(离线默认不猜真实墙钟)。"""
-    return ScheduleTrigger(interval_s=interval_s, now_fn=now_fn, trigger=trigger, start_at=start_at)
+    return ScheduleTrigger(
+        interval_s=interval_s,
+        now_fn=now_fn,
+        trigger=trigger,
+        start_at=start_at,
+        max_catchup=max_catchup,
+    )
 
 
 # trigger 缝的注册表:内置 manual / schedule;真实信号源(webhook / 消息队列 / 文件监听等)

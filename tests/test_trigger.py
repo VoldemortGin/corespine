@@ -268,3 +268,86 @@ def test_payload_never_reaches_trace_or_repr():
     # 合法观测:只记 trigger code + 计数,可照记。
     sink.emit("trigger.poll", trigger=events[0].trigger, count=len(events))
     assert sink.codes() == ["trigger.poll"]
+
+
+# --- ScheduleTrigger:max_catchup 截断 / 浮点边界 --------------------------------------
+
+
+def test_schedule_big_clock_jump_is_capped_and_fast():
+    import time
+
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=5)
+    clock["t"] = 2_000_000.0
+    started = time.perf_counter()
+    events = t.poll()
+    assert time.perf_counter() - started < 1.0
+    assert len(events) == 5
+    # 保留【最近】的 5 个 tick,更早的被合并跳过。
+    assert [e.payload["tick"] for e in events] == [
+        1_999_996,
+        1_999_997,
+        1_999_998,
+        1_999_999,
+        2_000_000,
+    ]
+    # 被跳过的数量可观察(只是计数,不含内容)。
+    assert events[0].payload["skipped_ticks"] == 1_999_995
+    assert t.skipped_ticks == 1_999_995
+
+
+def test_schedule_after_cap_old_ticks_do_not_resurface():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=3)
+    clock["t"] = 1000.0
+    t.poll()
+    assert t.poll() == []
+    clock["t"] = 1002.0
+    assert [e.payload["tick"] for e in t.poll()] == [1001, 1002]
+    assert t.skipped_ticks == 997  # 未再增加
+
+
+def test_schedule_within_cap_has_no_skipped_marker():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=3)
+    clock["t"] = 3.0
+    events = t.poll()
+    assert len(events) == 3
+    assert all("skipped_ticks" not in e.payload for e in events)
+    assert t.skipped_ticks == 0
+
+
+def test_schedule_default_max_catchup_is_finite():
+    from corespine.trigger.source import DEFAULT_MAX_CATCHUP
+
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0)
+    clock["t"] = 1_000_000.0
+    assert len(t.poll()) == DEFAULT_MAX_CATCHUP
+
+
+def test_schedule_max_catchup_none_restores_unbounded():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=1.0, now_fn=lambda: clock["t"], start_at=0.0, max_catchup=None)
+    clock["t"] = 500.0
+    events = t.poll()
+    assert [e.payload["tick"] for e in events] == list(range(1, 501))
+    assert t.skipped_ticks == 0
+
+
+def test_schedule_max_catchup_validation():
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            ScheduleTrigger(interval_s=1.0, now_fn=lambda: 0.0, max_catchup=bad)
+
+
+def test_schedule_float_interval_boundary_not_late():
+    clock = {"t": 0.0}
+    t = ScheduleTrigger(interval_s=0.1, now_fn=lambda: clock["t"], start_at=0.0)
+    clock["t"] = 0.3  # 0.3 // 0.1 == 2.0 的浮点坑:应已跨过 3 个边界
+    assert [e.payload["tick"] for e in t.poll()] == [1, 2, 3]
+
+
+def test_schedule_registry_passes_max_catchup():
+    t = make_trigger("schedule", interval_s=1.0, now_fn=lambda: 0.0, max_catchup=7)
+    assert isinstance(t, ScheduleTrigger)

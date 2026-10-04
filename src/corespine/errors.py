@@ -69,14 +69,21 @@ def error_to_dict(exc: BaseException) -> dict[str, object]:
     }
 
 
-class ConfigError(CorespineError):
-    """配置非法(缺必填、类型不符等)。"""
+class ConfigError(CorespineError, ValueError):
+    """配置非法(缺必填、类型不符等)。
+
+    同时继承 ValueError:核心原先在这些位置抛裸 ValueError,既有的 `except ValueError`
+    写法不会因改抛本类而失效。
+    """
 
     code = "config.invalid"
 
 
-class SeamError(CorespineError):
-    """缝相关错误(未知实现、工厂构造失败等)。"""
+class SeamError(CorespineError, ValueError):
+    """缝相关错误(未知实现、工厂构造失败等)。
+
+    同时继承 ValueError:未知 spec 原先抛裸 ValueError,既有 `except ValueError` 不会破。
+    """
 
     code = "seam.unknown"
 

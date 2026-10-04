@@ -24,3 +24,6 @@
 - `Registry.make` 及 `make_blob_store` / `make_credential_store` / `make_trigger` 的 `spec` 改为
   仅位置参数,工厂自己的 `spec=` 关键字不再抛 `TypeError: multiple values`。已核对全家族无人以
   `make(spec=...)` 关键字形式调用,向后兼容。
+- `ConfigError` / `SeamError` 现同时继承 `ValueError`,核心在未知 spec(`Registry.make` 及
+  `make_*`,`SeamError`,context 含 `seam` / `spec`)与缺必填 env(`load_from_env`,
+  `ConfigError`,context 含 `key`)处改抛它们;既有 `except ValueError` 不受影响。

@@ -97,3 +97,62 @@ def test_error_to_dict_result_is_json_serializable_for_any_exception():
 def test_corespine_error_is_an_exception():
     with pytest.raises(CorespineError):
         raise ConfigError("boom")
+
+
+# --- ConfigError / SeamError 同时是 ValueError,且核心自己会抛 --------------------------
+
+
+def test_config_and_seam_errors_are_value_errors():
+    assert issubclass(ConfigError, ValueError)
+    assert issubclass(SeamError, ValueError)
+    assert issubclass(ConfigError, CorespineError)
+    assert issubclass(SeamError, CorespineError)
+
+
+def test_value_error_handlers_still_catch_and_codes_stable():
+    for exc, code in ((ConfigError("x"), "config.invalid"), (SeamError("x"), "seam.unknown")):
+        try:
+            raise exc
+        except ValueError as caught:
+            assert caught is exc
+            assert caught.code == code  # type: ignore[attr-defined]
+
+
+def test_pickle_roundtrip_keeps_code_and_context():
+    import pickle
+
+    for err in (ConfigError("bad", key="APP_X"), SeamError("nope", seam="llm", spec="x")):
+        clone = pickle.loads(pickle.dumps(err))
+        assert type(clone) is type(err)
+        assert str(clone) == str(err)
+        assert clone.context == err.context
+        assert clone.code == err.code
+        assert clone.to_dict() == err.to_dict()
+
+
+def test_core_raises_seam_error_on_unknown_spec():
+    from corespine.seam.registry import Registry
+
+    reg: Registry[int] = Registry("demo")
+    with pytest.raises(SeamError) as ei:
+        reg.make("nope")
+    assert ei.value.code == "seam.unknown"
+    assert ei.value.context["seam"] == "demo"
+    assert "demo" in str(ei.value)
+
+
+def test_core_raises_config_error_on_missing_required():
+    import dataclasses
+
+    from corespine.config.env import load_from_env
+
+    @dataclasses.dataclass(frozen=True)
+    class Cfg:
+        host: str
+
+    with pytest.raises(ConfigError) as ei:
+        load_from_env(Cfg, prefix="APP", env={})
+    assert ei.value.code == "config.invalid"
+    assert "APP_HOST" in str(ei.value)
+    with pytest.raises(ValueError):  # 既有 except ValueError 写法仍成立
+        load_from_env(Cfg, prefix="APP", env={})

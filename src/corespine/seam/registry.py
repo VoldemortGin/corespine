@@ -7,7 +7,7 @@
     - make(spec, **kwargs):大小写/留白/连字符不敏感地把 spec 解析到工厂并构造实例;
     - 内置名找不到时,回落到 importlib.metadata 的 entry-point 自动发现
       (group 形如 "corespine.<seam>"),让第三方装包即扩展,无需改核心代码;
-    - 仍找不到则抛 ValueError,把【当前可用的全部名字】列清楚,绝不让人猜。
+    - 仍找不到则抛 SeamError(同时是 ValueError),把【当前可用的全部名字】列清楚,绝不让人猜。
 
 lazy_extra_import 是配套助手:延迟 import 一个可选依赖,缺失时把裸 ImportError
 翻译成"pip install <pkg>[<extra>]"的友好提示——支撑"离线精简默认 + 可选重依赖"
@@ -20,6 +20,8 @@ import importlib
 from collections.abc import Callable
 from importlib import metadata
 from typing import Any, TypeVar, cast
+
+from corespine.errors import SeamError
 
 T = TypeVar("T")
 
@@ -72,7 +74,7 @@ class Registry[T]:
     def make(self, spec: str, /, **kwargs: Any) -> T:
         """把 spec 解析到工厂并构造实例(大小写/留白/连字符不敏感)。
 
-        解析顺序:内置注册 -> entry-point 发现 -> 抛 ValueError(列清可用名)。
+        解析顺序:内置注册 -> entry-point 发现 -> 抛 SeamError(是 ValueError 子类,列清可用名)。
         spec 是【仅位置】参数:工厂自己的 `spec=` 关键字可经 **kwargs 透传而不撞名。
         """
         key = _normalize(spec)
@@ -86,7 +88,7 @@ class Registry[T]:
             # entry-point 的 load() 返回 Any;约定它给出本缝的工厂,cast 回 Factory[T]。
             factory = cast("Factory[T]", ep.load())
             return factory(**kwargs)
-        raise ValueError(self._unknown_message(spec, discovered))
+        raise SeamError(self._unknown_message(spec, discovered), seam=self._seam, spec=spec)
 
     def _unknown_message(self, spec: str, discovered: dict[str, metadata.EntryPoint]) -> str:
         available = sorted(set(self._factories) | set(discovered))

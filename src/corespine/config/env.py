@@ -7,7 +7,7 @@ env mapping,不碰进程环境)。但本助手是 domain-neutral 的:不预设�
 
 支持的字段类型:str / int / float / bool(及其 `X | None` 可选形式)。bool 解析为
 {1,true,yes,on} 为真、{0,false,no,off,""} 为假(均大小写不敏感)。未声明默认值
-的字段若缺对应 env,则抛 ValueError(把缺失的 env 名报清楚)。
+的字段若缺对应 env,则抛 ConfigError(ValueError 子类,把缺失的 env 名报清楚)。
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import os
 import types
 from collections.abc import Mapping
 from typing import Union, get_args, get_origin, get_type_hints
+
+from corespine.errors import ConfigError
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off", ""})
@@ -70,6 +72,6 @@ def load_from_env[T](cls: type[T], *, prefix: str, env: Mapping[str, str] | None
         if key in source:
             kwargs[f.name] = _coerce(source[key], hints.get(f.name, f.type))
         elif f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING:
-            raise ValueError(f"缺少必填配置 {key}(字段 {f.name!r} 无默认值)")
+            raise ConfigError(f"缺少必填配置 {key}(字段 {f.name!r} 无默认值)", key=key)
         # 否则:留空,交给 dataclass 自身的默认值。
     return cls(**kwargs)

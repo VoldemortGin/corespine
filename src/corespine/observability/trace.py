@@ -14,7 +14,8 @@ domain-neutral:不预设任何具体事件 code;每个 app 用自己的 code 词
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import dataclasses
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -33,8 +34,24 @@ FORBIDDEN_KEYS = frozenset(
         "chunk",
         "chunk_text",
         "body",
+        # 下游(ragspine / spineagent / spinestudio)常见的正文承载键名;并入后默认 sink 与
+        # enforce_trace_privacy 一并拦下(ADR 0006)。
+        "raw_text",
+        "user_prompt",
+        "contents",
+        "question",
+        "output",
+        "messages",
     }
 )
+
+# 递归校验的防御上限(对抗输入 / 自引用结构):容器层数(含顶层)与访问节点总数。
+# 超限按可疑载荷拒绝,绝不截断放行。
+MAX_TRACE_DEPTH = 8
+MAX_TRACE_NODES = 10_000
+
+# 允许直接出现在 trace 里的标量叶子(bool 是 int 子类;StrEnum / IntEnum 成员按 str / int 放行)。
+_SCALARS = (str, bytes, int, float, bool, type(None))
 
 
 class TraceError(CorespineError):
@@ -44,6 +61,81 @@ class TraceError(CorespineError):
     """
 
     code = "trace.forbidden"
+
+
+def _children(value: object, path: str, offending: list[str]) -> list[tuple[str, object]] | None:
+    """展开一层容器:返回 (路径, 子值) 列表并收集禁词键;标量返回 None;其余对象 fail-closed。
+
+    - Mapping:按键检查,路径 `x.key`;
+    - dataclass 实例(不含类本身):按字段名当键检查;
+    - NamedTuple(有 `_asdict` 的 tuple):先 `_asdict()`,按字段名当键检查;
+    - list / tuple:逐元素,路径 `x[i]`;set / frozenset:逐元素,路径 `x{*}`(无序,无下标)。
+    """
+    if isinstance(value, _SCALARS):
+        return None
+    if isinstance(value, tuple) and hasattr(value, "_asdict"):
+        value = value._asdict()
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        value = {f.name: getattr(value, f.name) for f in dataclasses.fields(value)}
+    if isinstance(value, Mapping):
+        items: list[tuple[str, object]] = []
+        for key, item in value.items():
+            key_path = f"{path}.{key}" if path else str(key)
+            if str(key).strip().lower() in FORBIDDEN_KEYS:
+                offending.append(key_path)
+            items.append((key_path, item))
+        return items
+    if isinstance(value, list | tuple):
+        return [(f"{path}[{i}]", item) for i, item in enumerate(value)]
+    if isinstance(value, set | frozenset):
+        return [(f"{path}{{*}}", item) for item in value]
+    raise TraceError(
+        f"trace 载荷含无法检查的非标量值({path}:{type(value).__qualname__}):只允许 str / bytes / "
+        "int / float / bool / None 及 Mapping / list / tuple / set / dataclass / NamedTuple "
+        "容器,其余一律拒绝。"
+    )
+
+
+def enforce_trace_privacy(fields: Mapping[str, object]) -> None:
+    """隐私门:载荷任意一层的键命中 FORBIDDEN_KEYS 即抛 TraceError(归一小写后精确匹配)。
+
+    递归检查 Mapping 的键、dataclass / NamedTuple 的字段名,并逐元素深入 list / tuple / set;
+    无法检查的非标量对象(含遍历时抛错的容器)fail-closed 拒绝;容器层数(含顶层)超过
+    MAX_TRACE_DEPTH、或访问节点数超过 MAX_TRACE_NODES 按可疑载荷拒绝(自引用结构也由此挡下)。
+    报错给出路径(如 `calls[0].prompt`)而【不】含取值。
+
+    默认 sink 的 emit 先调用它;自定义 / OTel sink 只要先调用它,就经同一条隐私门——扇出而不绕过。
+    与 ragspine `enforce_trace_privacy`(ADR 0028)语义兼容,下游可直接改用本函数。
+    """
+    offending: list[str] = []
+    budget = [MAX_TRACE_NODES]
+    # 显式栈,避免对抗输入打爆 Python 递归深度;(值, 路径, 层数)。
+    stack: list[tuple[object, str, int]] = [(fields, "", 1)]
+    while stack:
+        value, path, depth = stack.pop()
+        try:
+            items = _children(value, path, offending)
+        except TraceError:
+            raise
+        except Exception:  # noqa: BLE001 — 任何遍历异常都按无法检查 fail-closed
+            raise TraceError(
+                f"trace 载荷无法安全遍历({path or '<root>'}:{type(value).__qualname__}):按可疑载荷拒绝。"
+            ) from None
+        if items is None:
+            continue
+        if depth > MAX_TRACE_DEPTH:
+            raise TraceError(
+                f"trace 载荷嵌套超过 {MAX_TRACE_DEPTH} 层({path}):按可疑载荷拒绝,不截断放行。"
+            )
+        budget[0] -= len(items)
+        if budget[0] < 0:
+            raise TraceError(f"trace 载荷节点数超过 {MAX_TRACE_NODES}:按可疑载荷拒绝,不截断放行。")
+        stack.extend((item, item_path, depth + 1) for item_path, item in items)
+    if offending:
+        raise TraceError(
+            f"trace 载荷含受限字段 {sorted(offending)}:trace 只记 code / 计数 / 耗时,"
+            "不得携带答案正文 / 字段取值 / chunk 正文。"
+        )
 
 
 @dataclass(frozen=True)
@@ -99,7 +191,7 @@ class InProcessTraceExporter:
 class InProcessPrivacyTraceSink:
     """进程内默认 TraceSink:把事件存进内存列表,且拒绝任何携带受限内容的载荷。
 
-    隐私 by construction:emit 时先扫字段键,命中 FORBIDDEN_KEYS 立即抛 TraceError、
+    隐私 by construction:emit 时递归扫字段键(含嵌套容器),命中 FORBIDDEN_KEYS 立即抛 TraceError、
     绝不记录;通过校验的事件以 TraceEvent 追加到内部列表。只记 code / 计数 / 耗时 / 标志。
 
     可挂 0..N 个 TraceExporter 做扇出:扇出严格发生在隐私校验【之后】——受限载荷在校验阶段
@@ -128,12 +220,7 @@ class InProcessPrivacyTraceSink:
 
         校验通过后先本地记录,再扇出到每个 exporter——扇出在校验之后,受限正文到不了导出面。
         """
-        offending = sorted(k for k in fields if k.strip().lower() in FORBIDDEN_KEYS)
-        if offending:
-            raise TraceError(
-                f"trace 载荷含受限字段 {offending}:trace 只记 code / 计数 / 耗时,"
-                "不得携带答案正文 / 字段取值 / chunk 正文。"
-            )
+        enforce_trace_privacy(fields)
         event = TraceEvent(code=code, fields=dict(fields))
         self._events.append(event)
         for exporter in self._exporters:

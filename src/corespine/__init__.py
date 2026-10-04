@@ -53,12 +53,15 @@ from corespine.llm.provider import (
 from corespine.llm.rate_limit import RateLimitedProvider
 from corespine.observability.trace import (
     FORBIDDEN_KEYS,
+    MAX_TRACE_DEPTH,
+    MAX_TRACE_NODES,
     InProcessPrivacyTraceSink,
     InProcessTraceExporter,
     TraceError,
     TraceEvent,
     TraceExporter,
     TraceSink,
+    enforce_trace_privacy,
 )
 from corespine.queue.task_queue import FakeQueue, JobStatus, TaskQueue
 from corespine.seam.registry import Registry, lazy_extra_import
@@ -90,6 +93,9 @@ __all__ = [
     "InProcessPrivacyTraceSink",
     "InProcessTraceExporter",
     "FORBIDDEN_KEYS",
+    "MAX_TRACE_DEPTH",
+    "MAX_TRACE_NODES",
+    "enforce_trace_privacy",
     # llm(OpenAI chat-completions 规范)
     "LLMProvider",
     "StreamingLLMProvider",

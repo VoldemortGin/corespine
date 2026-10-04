@@ -19,7 +19,7 @@ install: ## 建 .venv(uv)并以 dev extra 可编辑安装(常规开发装法)
 # ---- 质量门 --------------------------------------------------------------------------
 
 .PHONY: ci
-ci: lint typecheck test ## 本地 CI 门:lint + 类型检查 + 测试(与 GitHub Actions 同形)
+ci: lint format-check typecheck test ## 本地 CI 门:lint + 格式检查 + 类型检查 + 测试(与 GitHub Actions 同形)
 
 .PHONY: test
 test: ## 跑测试套件
@@ -27,7 +27,11 @@ test: ## 跑测试套件
 
 .PHONY: lint
 lint: ## ruff 静态检查(风格 + import 顺序 + 死代码)
-	$(PYTHON) -m ruff check src tests benchmarks
+	$(PYTHON) -m ruff check src tests benchmarks examples
+
+.PHONY: format-check
+format-check: ## ruff 格式检查(不改文件;与 CI 同形)
+	$(PYTHON) -m ruff format --check
 
 .PHONY: typecheck
 typecheck: ## mypy --strict 类型检查(出货代码 src)

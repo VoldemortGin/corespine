@@ -26,7 +26,10 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint (ruff)
-        run: ruff check src tests benchmarks
+        run: ruff check src tests benchmarks examples
+
+      - name: Format (ruff)
+        run: ruff format --check
 
       - name: Typecheck (mypy --strict)
         run: mypy

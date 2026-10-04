@@ -23,7 +23,10 @@ Spine 家族的**薄共享核**(见 [ADR 0001](../docs/adr/0001-spine-family-bou
 | 模块 | 原语 |
 |---|---|
 | `seam/registry.py` | `Registry`:name→factory 解析(大小写/留白/连字符不敏感)+ entry-point 自动发现(`corespine.<seam>` group)+ 未知 spec 列清可用名 + `lazy_extra_import`(缺 extra 给"pip install …"友好提示) |
-| `observability/trace.py` | `TraceSink` 协议 + `InProcessPrivacyTraceSink`:只记 code/计数/耗时,**拒绝**任何携带正文(answer/value/text/content…)的载荷 |
+| `observability/trace.py` | `TraceSink` 协议 + `InProcessPrivacyTraceSink`:只记 code/计数/耗时,**递归拒绝**(含嵌套)任何携带正文(answer/value/text/content…)的载荷 + 公开的 `enforce_trace_privacy` |
+| `errors.py` | `CorespineError`(稳定 `code` + `retryable`)+ `ConfigError` / `SeamError`(同时是 `ValueError`)/ `ProviderError` + `error_to_dict` |
+| `blob/store.py` | `BlobStore` 协议(key → bytes)+ `MemoryBlobStore` / `FileSystemBlobStore` 零依赖默认 + `make_blob_store` |
+| `llm/rate_limit.py` | `RateLimitedProvider`:主动 TPM 限流包装(滑动窗口);包装流式 provider 后仍满足 `StreamingLLMProvider` |
 | `llm/provider.py` | `LLMProvider` 协议 + 离线确定性 `MockProvider`(零网络、零 key、可复现) |
 | `config/env.py` | `load_from_env`:把 `PREFIX_*` 环境变量读进一个 frozen dataclass(范式同 ragspine `from_env`) |
 | `queue/task_queue.py` | `TaskQueue` 协议 + `FakeQueue`:同步内联执行 + 记录,离线/测试用 |

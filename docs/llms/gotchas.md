@@ -29,7 +29,7 @@ text = out.choices[0].message.content  # 取文本:choices[0].message.content
 
 ## 2 · TraceSink 拒绝正文字段(隐私 by construction)
 
-`InProcessPrivacyTraceSink.emit` 会扫描载荷键,命中 `FORBIDDEN_KEYS` 就**直接抛 `TraceError` 且不
+`InProcessPrivacyTraceSink.emit` 会【递归】扫描载荷键(含嵌套的 dict / list / dataclass 等;无法检查的对象也拒绝),命中 `FORBIDDEN_KEYS` 就**直接抛 `TraceError` 且不
 记录**——不是警告、不是静默丢弃,而是抛异常。
 
 ```python
@@ -44,8 +44,9 @@ sink.emit("retrieve", count=3, hit=True)
 sink.emit("score", confidence_bucket="high")  # 换个不在禁词表的键名
 ```
 
-被禁的键(归一为小写后比对):`answer / body / chunk / chunk_text / completion / content / prompt /
-text / value`。`"score"` 里含 "value" 子串不会误伤——比对的是**完整键名**,不是子串。`TraceError`
+被禁的键(归一为小写后比对):`answer / body / chunk / chunk_text / completion / content / contents /
+messages / output / prompt / question / raw_text / text / user_prompt / value`。嵌套里的同名键同样被拒
+(`sink.emit("x", meta={"text": "…"})` 抛 `TraceError`)。`"score"` 里含 "value" 子串不会误伤——比对的是**完整键名**,不是子串。`TraceError`
 继承 `CorespineError`,可按 `code == "trace.forbidden"` 统一捕获。
 
 ## 3 · Registry spec 名称会被归一(别依赖原样大小写)
@@ -61,7 +62,7 @@ reg.make("inProcess")  # ❌ 不命中:驼峰里没有分隔符,归一后是 "in
 
 - 同名重复 `register` 后者覆盖前者。
 - **内置注册优先于 entry-point 发现**:同名时内置胜出(便于测试覆盖第三方实现)。
-- 未知 spec 抛标准库 **`ValueError`**(不是 `SeamError`),消息里列清当前全部可用名。
+- 未知 spec 抛 **`SeamError`**(同时是 `ValueError`,既有 `except ValueError` 照常捕获),消息里列清当前全部可用名。
 - `names()` 返回【内置 + entry-point 发现】去重排序后的全集;entry-point 发现是延迟的,只在
   `make` / `names` 时才扫(import corespine 时不付代价)。
 
@@ -101,11 +102,11 @@ Redis/OpenAI**——它没有,也永远不会有。
 - **`MockProvider(prefix=...)` 的 `prefix` 是关键字参数**(`*` 之后):`MockProvider("m")` 报错,得
   `MockProvider(prefix="m")`。
 - **`ConformanceSuite` 的 `implementations` 是「无参工厂」`Callable[[], T]`**,不是实例:传 `Counter`
-  (类本身可无参构造)而非 `Counter()`。每格各新建实例以杜绝状态串味。空 implementations 抛 `ValueError`。
+  (类本身可无参构造)而非 `Counter()`。每格各新建实例以杜绝状态串味。空 implementations、空 `InvariantPack`、同名重复 `add` 都抛 `ValueError`(防静默全绿 / 静默覆盖)。
 - **`InvariantPack` 的不变量「通过则返回 None、违反则抛异常」**,不是返回 bool。`return c.add(3) == 3`
   是错的(返回 bool 但从不抛),要 `if c.add(3) != 3: raise AssertionError(...)`。
-- **`load_from_env` 的 `cls` 必须是 dataclass**,否则 `TypeError`;无默认值字段缺 env 抛 `ValueError`;
-  bool 取值不在真 / 假词表抛 `ValueError`。
+- **`load_from_env` 的 `cls` 必须是 dataclass**,否则 `TypeError`;无默认值字段缺 env 抛 `ConfigError`(`ValueError` 子类);
+  转型失败(含 bool 取值不在真 / 假词表)与不支持的注解同样抛 `ConfigError`,消息只含 env 名、不含取值。
 - **`FakeQueue` 的 job 失败不外抛**——被捕获记进 `JobStatus.error`(`status="failed"`)。要判成败看
   `get(jid).status` 是 `"finished"` 还是 `"failed"`,而不是靠 try/except。
 - **`error_to_dict` 吃 `BaseException`**:`CorespineError` 走其 `to_dict()`,其余异常给保守默认

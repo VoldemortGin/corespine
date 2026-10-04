@@ -59,7 +59,7 @@ registry.names()  # 列出【内置 + entry-point 发现】的全部可用名(�
 - group 名**必须**是 `corespine.<seam>`,`<seam>` 与 `Registry("<seam>")` 的入参完全一致;
 - **内置注册优先于 entry-point**:同名时内置胜出(便于在测试里覆盖);
 - 发现是**延迟**的:只在 `make` / `names` 解析时才扫,不在 import 期付出代价;
-- 未知 spec 抛 `ValueError`,并**列清当前全部可用名**(绝不让人猜)。
+- 未知 spec 抛 `SeamError`(`ValueError` 子类),并**列清当前全部可用名**(绝不让人猜)。
 
 ## 二、可选 extra 命名约定
 

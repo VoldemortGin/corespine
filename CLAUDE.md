@@ -36,11 +36,17 @@ src/corespine/
   seam/registry.py         Registry(name->factory) + make(spec) + entry-point 发现 + lazy_extra_import
   blob/store.py            BlobStore 协议(key->bytes)+ Memory/FileSystem 默认 + make_blob_store 工厂
   observability/trace.py   TraceSink 协议 + InProcessPrivacyTraceSink(只记 code/计数/耗时,拒绝正文)
+                           + enforce_trace_privacy 递归隐私门(ADR 0006)
                            + TraceExporter 扇出协议(导出面与本地面等宽,校验后才扇出)
   llm/provider.py          LLMProvider 协议 + StreamingLLMProvider 叠加协议 + 离线确定性 MockProvider
+  llm/rate_limit.py        RateLimitedProvider:主动 TPM 限流包装(包装流式 inner 后保留流式能力)
+  credential/store.py      CredentialStore 协议(namespace×name->secret)+ Memory/InsecureLocal/EncryptedFile + 工厂
+  trigger/source.py        TriggerSource 协议(拉模式 poll)+ ManualTrigger/ScheduleTrigger(max_catchup)+ 工厂
+  errors.py                CorespineError(code/retryable)+ Config/Seam/ProviderError + error_to_dict
   config/env.py            load_from_env:PREFIX_* env -> frozen dataclass(范式同 ragspine from_env)
   queue/task_queue.py      TaskQueue 协议 + 同步内联 FakeQueue 默认
   conformance/harness.py   ConformanceSuite × InvariantPack:实现 × 不变量 笛卡尔积(机制,无具体不变量)
+  conformance/packs.py     可复用 InvariantPack:trace 隐私 / queue / llm / 流式 llm(下游一行绑定)
 ```
 
 ## 跑(始终从包根)

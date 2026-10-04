@@ -69,3 +69,8 @@
     的形式(Path -> str,set -> 排序 list,其余 -> str);`error.context` 本身不变。
   - `MemoryBlobStore.put` / `FileSystemBlobStore.put` 对非 bytes-like 输入(如 `5`、`[1, 2]`)抛
     `TypeError`(原先 `bytes(5)` 静默存 5 个零字节);bytes / bytearray / memoryview 照常。
+- 工程:CI 新增 `ruff format --check` 门并让 lint 覆盖 `examples`(Makefile 同步,`make ci` 含
+  `format-check`);修掉 8 个既有不合规文件(含 4 份 markdown 与 README 的代码块格式);
+  `docs/llms/api.md` / `llms.txt` / `overview.md` / `gotchas.md` / `CLAUDE.md` / `README.md` 补齐
+  blob / credential / trigger / `RateLimitedProvider` / `StreamingLLMProvider` / `TraceExporter` /
+  `ProviderError` 与本批新增公开面。

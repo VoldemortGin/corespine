@@ -5,7 +5,9 @@
 > [overview.md](overview.md),易错点见 [gotchas.md](gotchas.md)。
 >
 > 全部从顶层包导入:`from corespine import Registry, MockProvider, ...`。
-> `corespine.__version__ == "0.4.0"`。`__all__` 共 59 项(含 `__version__`)。
+> `corespine.__version__` 取已安装包版本(当前 0.5.1)。`__all__` 共 62 项(含 `__version__`)。
+> 另有未进 `__all__` 的子模块公开面:`corespine.conformance.packs`(可复用 InvariantPack,见 conformance 节)。
+> 尚未发版的行为变化见仓根 `CHANGELOG.md` 的 `[Unreleased]`。
 
 ## seam —— `corespine.seam.registry`
 
@@ -24,10 +26,11 @@ registry.group  -> str               # entry-point 发现使用的 group:f"cores
 register(name: str, factory: Factory[T]) -> None
     # 登记一个内置实现;名字归一后入表(同名后者覆盖)。factory 签名:(**kwargs) -> T。
 
-make(spec: str, **kwargs: Any) -> T
-    # 把 spec 解析到工厂并构造实例。解析顺序:内置注册 -> entry-point 发现 -> 抛 ValueError。
+make(spec: str, /, **kwargs: Any) -> T
+    # 把 spec 解析到工厂并构造实例。spec 是【仅位置】参数,工厂自己的 spec= 关键字可经 kwargs 透传。
+    # 解析顺序:内置注册 -> entry-point 发现 -> 抛 SeamError(ValueError 子类,code="seam.unknown")。
     # spec 归一:去首尾留白 + 转小写 + 连字符/空格统一为下划线("In-Process"=="in_process")。
-    # kwargs 原样透传给工厂。未知 spec 抛 ValueError 并列清【当前全部可用名】。
+    # kwargs 原样透传给工厂。未知 spec 抛 SeamError(同时是 ValueError)并列清【当前全部可用名】。
 
 names() -> list[str]
     # 当前全部可用名:内置 + entry-point 发现,去重后按字典序。
@@ -52,22 +55,39 @@ trace 出口的最小结构接口。
 emit(self, code: str, **fields: object) -> None    # 发射一条事件(code + 非敏感字段)
 ```
 
+### `class TraceExporter(Protocol)`(`@runtime_checkable`)
+
+trace 导出面:`export(self, event: TraceEvent) -> None`。只会收到【已通过隐私校验】的事件。真实导出
+后端(OTel / Langfuse)由各 app 经可选 extra 接入,核心只给进程内收集器 `InProcessTraceExporter`
+(`.events -> list[TraceEvent]`)。
+
 ### `class InProcessPrivacyTraceSink`
 
 进程内默认 `TraceSink`:把事件存进内存列表,且**拒绝**任何携带受限内容的载荷。
 
 ```python
-InProcessPrivacyTraceSink() -> None                 # 无参构造
+InProcessPrivacyTraceSink(*, exporters: Sequence[TraceExporter] | None = None) -> None
 
 emit(self, code: str, **fields: object) -> None
-    # 先扫 fields 键,命中 FORBIDDEN_KEYS(归一为小写后比对)立即抛 TraceError、不记录;
-    # 通过校验的事件以 TraceEvent 追加到内部列表。隐私 by construction。
+    # 先调 enforce_trace_privacy(fields)(递归,含嵌套容器),命中禁词键 / 无法检查的对象即抛
+    # TraceError、不记录不扇出;通过后深拷贝快照、本地记录,再给每个 exporter 一份独立深拷贝。
+    # 单个 exporter 抛错不影响其余 exporter 与调用方,只累计 exporter_failures。
 
 codes(self) -> list[str]                            # 已记录事件的 code 序列(按记录顺序)
+add_exporter(self, exporter: TraceExporter) -> None # 追加扇出目标
 
 # 属性(只读 property)
 events -> list[TraceEvent]                          # 已记录事件的只读副本(外部改动不污染内部)
+exporter_failures -> int                            # exporter 抛错累计次数(仅计数,不含内容)
 ```
+
+### `enforce_trace_privacy(fields: Mapping[str, object]) -> None`
+
+公开的递归隐私门(ADR 0006)。递归检查 Mapping 的键、dataclass / NamedTuple 的字段名、list /
+tuple / set 的元素;任意一层键命中 `FORBIDDEN_KEYS`(小写后精确匹配)、遇到无法检查的非标量对象、
+容器层数(含顶层)超过 `MAX_TRACE_DEPTH`(8)、访问节点数超过 `MAX_TRACE_NODES`(10000)都抛
+`TraceError`(fail-closed)。报错只给路径(如 `calls[0].prompt`),不含取值。自定义 sink 先调它即
+经同一条隐私门。
 
 ### `class TraceEvent`(frozen dataclass)
 
@@ -75,14 +95,17 @@ events -> list[TraceEvent]                          # 已记录事件的只读�
 TraceEvent(code: str, fields: dict[str, object] = {})   # 一条被记录的 trace(只读)
 ```
 
+`fields` 在构造时被拷贝成只读 `dict` 子类:`==` / `json.dumps` 照常,就地修改抛 `TypeError`。
+
 ### `class TraceError(CorespineError)`
 
 trace 载荷违反隐私约定时抛出。`code = "trace.forbidden"`,`retryable = False`。继承 `CorespineError`。
 
 ### `FORBIDDEN_KEYS: frozenset[str]`
 
-禁止出现在 trace 载荷里的键(归一为小写后比对,命中任一即拒整条):
-`{answer, body, chunk, chunk_text, completion, content, prompt, text, value}`。
+禁止出现在 trace 载荷里的键(归一为小写后比对,命中任一即拒整条;嵌套同样检查):
+`{answer, body, chunk, chunk_text, completion, content, contents, messages, output, prompt,
+question, raw_text, text, user_prompt, value}`。要记正文规模请记计数(如 `answer_chars`)。
 
 ## llm —— `corespine.llm.provider`
 
@@ -126,6 +149,32 @@ Usage(prompt_tokens: int = 0, completion_tokens: int = 0, total_tokens: int = 0)
 
 取文本的惯用路径:`completion.choices[0].message.content`。
 
+### 流式:`StreamingLLMProvider`(叠加协议)与 chunk 类型
+
+```python
+class StreamingLLMProvider(Protocol):   # @runtime_checkable,独立于 LLMProvider(不破坏只实现 chat 的实现者)
+    def stream_chat(self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None) -> Iterator[ChatCompletionChunk]: ...
+
+ChatCompletionChunk(choices: tuple[ChunkChoice, ...], model: str = "", id: str = "", created: int = 0, object: str = "chat.completion.chunk")
+ChunkChoice(index: int, delta: ChoiceDelta, finish_reason: str | None = None)
+ChoiceDelta(role: str | None = None, content: str | None = None)
+```
+
+`MockProvider` 同时满足两者:首块 role、中间块 content 片段、末块 `finish_reason="stop"`,所有 content
+片段拼接逐字等于 `chat()` 的内容。用 `isinstance(p, StreamingLLMProvider)` 探测能力。
+
+### `class RateLimitedProvider`(`corespine.llm.rate_limit`)
+
+```python
+RateLimitedProvider(inner: LLMProvider, *, tokens_per_minute: int, window_seconds: float = 60.0)
+chat(messages, *, tools=None) -> ChatCompletion      # 超出每分钟 token 预算时阻塞等待(滑动窗口,软限流)
+```
+
+主动客户端 TPM 限流,与 SDK 的被动重试互补。`tokens_per_minute` / `window_seconds` 非正抛
+`ValueError`。**流式能力如实透传**:inner 满足 `StreamingLLMProvider` 时结果也满足它(带限流计量
+的 `stream_chat`;chunk 无 `usage` 时按约 4 字符 / token 估算);inner 只会 `chat` 时
+`isinstance(x, StreamingLLMProvider)` 为 False。两种结果都是 `RateLimitedProvider` 的实例。
+
 ## config —— `corespine.config.env`
 
 ### `load_from_env(cls: type[T], *, prefix: str, env: Mapping[str, str] | None = None) -> T`
@@ -134,14 +183,18 @@ Usage(prompt_tokens: int = 0, completion_tokens: int = 0, total_tokens: int = 0)
 
 - `cls` 必须是 dataclass(否则 `TypeError`)。
 - 每个字段从 `env_key(prefix, field)` 读取;命中则按字段注解类型转换,缺失则用 dataclass 字段默认值。
-- 字段**无默认值且 env 缺失** → 抛 `ValueError`(把缺失的 env 名报清楚)。
-- 支持类型:`str` / `int` / `float` / `bool`(及其 `X | None` 可选形式)。bool 解析:
-  `{1,true,yes,on}` 为真、`{0,false,no,off,""}` 为假(均大小写不敏感),其余 raise `ValueError`。
+- 字段**无默认值且 env 缺失** → 抛 `ConfigError`(`ValueError` 子类,把缺失的 env 名报清楚)。
+- 支持类型:`str` / `int` / `float` / `bool` / `pathlib.Path` / `list[str]`(逗号分隔,去空白、丢空项),
+  及其 `X | None` 形式。bool:`{1,true,yes,on}` 为真、`{0,false,no,off,""}` 为假(大小写不敏感)。
+  `int` / `float` / `Path` / `list[str]` 的 `X | None` 遇空串得 `None`(`str | None` / `bool | None` 保持旧行为)。
+- 转型失败 / 不支持的注解(如 `int | str`、`list[int]`、`object`,仅当对应 env 存在时)抛
+  `ConfigError`,消息只含环境变量名、**不含取值**(取值可能是密钥)。`init=False` 字段不读 env。
 - `env` 可注入(默认读 `os.environ`)——测试传入自己的 mapping,不碰进程环境。
 
 ### `env_key(prefix: str, field_name: str) -> str`
 
-字段名 → 环境变量名:`f"{prefix.rstrip('_')}_{field_name.upper()}"`。例:`env_key("APP", "port") == "APP_PORT"`。
+字段名 → 环境变量名:`f"{prefix.rstrip('_')}_{field_name.upper()}"`;空前缀不加下划线
+(`env_key("", "port") == "PORT"`)。例:`env_key("APP", "port") == "APP_PORT"`。
 
 ## queue —— `corespine.queue.task_queue`
 
@@ -186,7 +239,7 @@ JobStatus(id: str, status: str, result: dict[str, Any] | None = None, error: dic
 ```python
 InvariantPack(name: str, invariants: dict[str, Invariant[T]] = {})
 
-add(self, name: str, check: Invariant[T]) -> InvariantPack[T]    # 登记一个不变量;返回自身(可链式)
+add(self, name: str, check: Invariant[T]) -> InvariantPack[T]    # 登记一个不变量;返回自身(可链式);同名重复抛 ValueError
 names(self) -> list[str]                                         # 全部不变量名
 ```
 
@@ -200,13 +253,13 @@ names(self) -> list[str]                                         # 全部不变�
 ```python
 ConformanceSuite(implementations: dict[str, Factory[T]], pack: InvariantPack[T]) -> None
     # implementations: 名字 -> 无参工厂 Callable[[], T](每格各新建实例,杜绝状态串味)。
-    # implementations 为空 -> 抛 ValueError。
+    # implementations 为空、或 pack 没有任何不变量 -> 抛 ValueError(空包会静默全绿)。
 
 cases(self) -> list[tuple[str, str]]                # 全部 (实现名, 不变量名) 组合
-ids(self) -> list[str]                              # 与 cases() 对齐的可读 id,形如 "impl/invariant"
+ids(self) -> list[str]                              # 与 cases() 对齐的可读 id,形如 "impl-invariant"(与 parametrize_kwargs 的 ids 相同)
 check(self, impl: str, invariant: str) -> None      # 跑单格:新建该实现实例,执行该不变量(失败原样抛)
-run(self) -> list[CaseResult]                       # 跑全部格子并收集结果(不抛;用于离线自检/报告)
-passed(self) -> bool                                # 便捷:全部格子是否通过
+run(self) -> list[CaseResult]                       # 跑全部格子并收集结果;Exception / pytest.fail 记失败、pytest.skip 记 skipped(passed=False),KeyboardInterrupt / SystemExit / pytest.exit 原样外抛
+passed(self) -> bool                                # 便捷:全部格子是否通过(跳过不算通过)
 
 parametrize_kwargs(self) -> dict[str, object]
     # 产出可直接喂 pytest.mark.parametrize(**...) 的 kwargs(core 不 import pytest,只返回纯数据)。
@@ -221,9 +274,22 @@ parametrize_kwargs(self) -> dict[str, object]
 ### `class CaseResult`(frozen dataclass)
 
 ```python
-CaseResult(impl: str, invariant: str, passed: bool, error: str | None = None)
+CaseResult(impl: str, invariant: str, passed: bool, error: str | None = None, skipped: bool = False)
     # 单个 (实现 × 不变量) 格子的执行结果;error 形如 "AssertionError: <msg>"(passed=False 时)。
 ```
+
+### 可复用的 InvariantPack —— `corespine.conformance.packs`
+
+下游一行绑定:`ConformanceSuite({"mine": MySink}, TRACE_PRIVACY_PACK)`。
+
+| 常量 | 适用的实现 | 内容 |
+|---|---|---|
+| `TRACE_PRIVACY_PACK: InvariantPack[TraceSink]` | 任意 `TraceSink` | 顶层 / 嵌套禁词键被拒、不可检查对象被拒、合法元数据放行 |
+| `QUEUE_PACK: InvariantPack[TaskQueue]` | 任意 `TaskQueue` | 同步执行记结果、失败入状态不外抛、显式 job_id 幂等、未知 id 为 None、点路径 func |
+| `LLM_PROVIDER_PACK: InvariantPack[LLMProvider]` | 任意 `LLMProvider` | OpenAI 形状、usage 自洽、不改写入参 |
+| `STREAMING_PROVIDER_PACK: InvariantPack[StreamingLLMProvider]` | 【确定性】流式 provider | 末块有 finish_reason、流式拼接 == 非流式 |
+
+blob / credential / trigger 的契约包目前在各自测试里(`tests/test_blob.py` 等),尚未上提。
 
 ## errors —— `corespine.errors`
 
@@ -243,6 +309,7 @@ retryable: bool = False
 to_dict(self) -> dict[str, object]
     # 归一为可被 json.dumps 序列化的 dict:
     # {"type": 类名, "code": code, "message": str(self), "retryable": bool, "context": dict}
+    # context 里的 Path -> str、set -> 排序 list、未知对象 -> str,保证可 json.dumps;self.context 不变。
 ```
 
 ### `error_to_dict(exc: BaseException) -> dict[str, object]`
@@ -253,13 +320,74 @@ to_dict(self) -> dict[str, object]
 ### 内置子类
 
 ```python
-class ConfigError(CorespineError):
-    code = "config.invalid"  # 配置非法(缺必填、类型不符等)
+class ConfigError(CorespineError, ValueError):
+    code = "config.invalid"  # 配置非法(缺必填、转型失败、不支持的注解);context 含 key(env 名)
 
 
-class SeamError(CorespineError):
-    code = "seam.unknown"  # 缝相关错误(未知实现、工厂构造失败等)
+class SeamError(CorespineError, ValueError):
+    code = "seam.unknown"  # 未知 spec / 缝构造失败;context 含 seam / spec
+
+
+class ProviderError(CorespineError):
+    code = "provider.error"  # provider / 外部服务调用失败的统一边界异常(网络 / 超时 / API 错误归一到此)
 ```
 
-> 注:`Registry.make` 的未知 spec 抛的是标准库 `ValueError`(非 `SeamError`);`load_from_env` 的缺失/
-> 非法抛标准库 `ValueError` / `TypeError`。`SeamError` / `ConfigError` 是供各 app 自用的语义子类示范。
+`ConfigError` / `SeamError` 同时继承 `ValueError`:核心在缺必填 env / 转型失败(`load_from_env`)与未知
+spec(`Registry.make`、`make_*`)处抛它们,既有的 `except ValueError` 不受影响。`ProviderError`
+只包裹 SDK / 外部服务的网络类异常,程序错误(KeyError / TypeError 等)照常向上抛(ADR 0002)。
+
+## blob —— `corespine.blob.store`
+
+```python
+class BlobStore(Protocol):                      # @runtime_checkable
+    def put(self, key: str, data: bytes) -> None        # 写入 / 覆盖;非 bytes-like(如 5、[1,2])抛 TypeError
+    def get(self, key: str) -> bytes                    # 缺失抛 BlobNotFound
+    def delete(self, key: str) -> None                  # 幂等
+    def exists(self, key: str) -> bool                  # 空字节也算存在
+
+MemoryBlobStore()                               # 进程内 dict
+FileSystemBlobStore(root: str | Path)           # key 经 sha256 摊平成文件名,防路径穿越
+make_blob_store(spec: str, /, **kwargs) -> BlobStore    # "memory" / "filesystem"(需 root=...);BLOB_REGISTRY 为其注册表
+BlobError(CorespineError)  code="blob.error";  BlobNotFound(BlobError)  code="blob.not_found"
+```
+
+## credential —— `corespine.credential.store`
+
+```python
+class CredentialStore(Protocol):                # @runtime_checkable;namespace × name -> str 秘密
+    def set(self, namespace: str, name: str, value: str) -> None
+    def get(self, namespace: str, name: str) -> str     # 缺失抛 CredentialNotFound
+    def delete(self, namespace: str, name: str) -> None # 幂等
+    def list(self, namespace: str) -> list[str]         # 字典序
+
+MemoryCredentialStore()                                  # 进程内,零落地
+InsecureLocalCredentialStore(path: str | Path)           # 明文 JSON + 0600(命名即警示,不是加密)
+EncryptedFileCredentialStore(path: str | Path, *, key: bytes | str)   # Fernet,需 corespine[crypto];.generate_key() -> bytes
+make_credential_store(spec: str, /, **kwargs) -> CredentialStore      # "memory" / "insecure_local" / "encrypted_file";CREDENTIAL_REGISTRY
+CredentialError(CorespineError)  code="credential.error"
+CredentialNotFound(CredentialError)  code="credential.not_found"
+```
+
+文件损坏 / 形状非法抛 `CredentialError(code="credential.corrupt")`,错 key 抛 `credential.bad_key`
+(Fernet 无法区分错 key 与密文损坏);异常链已断开、不含明文。进程内锁**不防多进程**同时写同一文件。
+秘密值永不出现在 repr / str / 异常 / trace。
+
+## trigger —— `corespine.trigger.source`
+
+```python
+class TriggerSource(Protocol):                  # @runtime_checkable;拉模式
+    def poll(self) -> list[TriggerEvent]               # 返回尚未观测过的事件,取出即消费;空闲返回 []
+
+TriggerEvent(trigger: str, id: str, payload: dict[str, Any] = {}, at: float = 0.0)   # frozen;repr 不含 payload
+ManualTrigger(*, trigger: str = "manual", namespace: str = "")   # fire(payload=None, *, at=0.0) -> TriggerEvent 入队;poll 排空
+ScheduleTrigger(*, interval_s: float, now_fn: Callable[[], float], trigger: str = "schedule",
+                start_at: float | None = None, max_catchup: int | None = 100)
+make_trigger(spec: str, /, **kwargs) -> TriggerSource    # "manual" / "schedule";TRIGGER_REGISTRY
+TRIGGER_MANUAL = "manual";  TRIGGER_SCHEDULE = "schedule";  DEFAULT_MAX_CATCHUP = 100   # DEFAULT_MAX_CATCHUP 仅在 corespine.trigger / corespine.trigger.source
+```
+
+- `ScheduleTrigger` 时钟经 `now_fn` 注入(绝不直接 `time.time()`)。一次 `poll()` 最多补发 `max_catchup`
+  个 tick:积压更多时只保留【最近】的,更早的被合并跳过且之后不再涌出;跳过数见 `.skipped_ticks`,
+  本次有跳过时首个事件 payload 带 `skipped_ticks`。传 `max_catchup=None` 恢复无限补发(大跳时线性耗时)。
+- `ManualTrigger` 的事件 id 只由 (trigger, namespace, 序号) 决定:同实例内唯一、可重放;跨实例 / 重启
+  同序号会重复,需不撞时传不同 `namespace`。

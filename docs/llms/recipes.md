@@ -15,7 +15,7 @@ provider = reg.make("  MOCK ")  # 大小写/留白/连字符不敏感 -> 解析�
 print(reg.names(), reg.group, reg.seam)  # ['mock'] corespine.llm llm
 print(type(provider).__name__)  # MockProvider
 
-# 未知 spec:抛 ValueError 并列清当前全部可用名(绝不让人猜)
+# 未知 spec:抛 SeamError(ValueError 子类)并列清当前全部可用名(绝不让人猜)
 try:
     reg.make("nope")
 except ValueError as e:
@@ -43,7 +43,7 @@ except TraceError as e:
     print(e.code)  # trace.forbidden
 ```
 
-被禁的键见 `FORBIDDEN_KEYS`:`answer / body / chunk / chunk_text / completion / content / prompt / text / value`。
+被禁的键见 `FORBIDDEN_KEYS`(含 `answer / body / chunk / text / value / content / prompt / question / output / messages` 等,嵌套同样检查)。
 
 ## R3 · MockProvider.chat:OpenAI 形状、确定性
 
@@ -97,7 +97,7 @@ print(cfg)  # Cfg(host='localhost', port=9000, debug=True, token='t-123')
 print(env_key("APP", "port"))  # APP_PORT
 
 
-# 无默认值的字段缺对应 env -> ValueError(把缺失 env 名报清楚)
+# 无默认值的字段缺对应 env -> ConfigError(ValueError 子类,把缺失 env 名报清楚)
 @dataclass(frozen=True)
 class Req:
     api_key: str
@@ -109,7 +109,7 @@ except ValueError as e:
     print(e)  # 缺少必填配置 SVC_API_KEY(字段 'api_key' 无默认值)
 ```
 
-bool 解析:`{1,true,yes,on}` 真、`{0,false,no,off,""}` 假(大小写不敏感)。支持 `str/int/float/bool` 及 `X|None`。
+bool 解析:`{1,true,yes,on}` 真、`{0,false,no,off,""}` 假(大小写不敏感)。支持 `str/int/float/bool/Path/list[str]` 及 `X|None`(其余注解抛 `ConfigError`)。
 
 ## R5 · FakeQueue:同步内联执行
 

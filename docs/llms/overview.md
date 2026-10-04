@@ -1,6 +1,6 @@
 # corespine 总览(给 AI 消费者)
 
-> 本篇建立心智模型:corespine 是什么、解决什么、何时用 / 不用、六条缝与统一元模式。
+> 本篇建立心智模型:corespine 是什么、解决什么、何时用 / 不用、各缝与统一元模式。
 > API 速查见 [api.md](api.md),可跑示例见 [recipes.md](recipes.md),易错点见 [gotchas.md](gotchas.md)。
 
 ## 是什么
@@ -9,7 +9,7 @@ corespine 是 **Spine 家族的薄共享核**:一组 **domain-neutral 的底层�
 RAG、也不属于 agent 的稳定地基。它被 `ragspine` / `spineagent` 等兄弟包各自依赖,但**不**反向
 依赖任何一个,也**不**含任何它们的领域概念。
 
-它由六条「缝」(seam)+ 一个 errors 缝构成,每条缝只装【极小且明显稳定】的机制。核心
+它由多条「缝」(seam)+ 一个 errors 缝构成,每条缝只装【极小且明显稳定】的机制。核心
 import **零第三方 SDK、零网络、零运行时依赖**(`dependencies` 恒空),装上即可离线、确定性地
 端到端跑。
 
@@ -68,14 +68,18 @@ Protocol(只定结构接口,绝不 import 任何 SDK)
 **机制,不是保证。** corespine 提供机制(conformance 基座、缝注册表、隐私 trace 形状);具体
 **不变量由各 app 自己绑**。这里不出现任何具体业务不变量。
 
-### 六条缝 + errors 缝
+### 缝一览(+ errors)
 
 | 缝(模块) | Protocol / 核心类型 | 离线默认实现 | 一句话 |
 |---|---|---|---|
 | `seam/registry` | — | `Registry` + `lazy_extra_import` | `name->factory` 解析(归一)+ entry-point 自动发现(group `corespine.<seam>`)+ 未知 spec 列清可用名 |
 | `observability/trace` | `TraceSink` | `InProcessPrivacyTraceSink` | 只记 code/计数/耗时;载荷含正文字段(见 `FORBIDDEN_KEYS`)即 raise `TraceError` |
 | `llm/provider` | `LLMProvider` | `MockProvider` | OpenAI chat-completions 规范:`chat(messages, *, tools=None) -> ChatCompletion`;Mock 确定性、不伪造 tool_calls |
-| `config/env` | — | — | `load_from_env`:`PREFIX_*` env → frozen dataclass(支持 str/int/float/bool 及 `X\|None`) |
+| `config/env` | — | — | `load_from_env`:`PREFIX_*` env → frozen dataclass(支持 str/int/float/bool/Path/list[str] 及 `X\|None`) |
+| `blob/store` | `BlobStore` | `MemoryBlobStore` / `FileSystemBlobStore` | key → bytes 制品存储;`make_blob_store` |
+| `credential/store` | `CredentialStore` | `MemoryCredentialStore` / `InsecureLocalCredentialStore` / `EncryptedFileCredentialStore`(`[crypto]`) | namespace × name → secret;秘密永不入 repr / 异常 / trace |
+| `trigger/source` | `TriggerSource` | `ManualTrigger` / `ScheduleTrigger` | 拉模式 `poll()` → `TriggerEvent`;`ScheduleTrigger` 注入时钟、`max_catchup` 限补发 |
+| `llm/rate_limit` | (包装 `LLMProvider`) | `RateLimitedProvider` | 主动 TPM 限流;包装流式 provider 后仍是 `StreamingLLMProvider` |
 | `queue/task_queue` | `TaskQueue` | `FakeQueue` | `enqueue` 同步内联执行 job、`get` 查 `JobStatus`;失败记进状态(不外抛) |
 | `conformance/harness` | — | — | `ConformanceSuite` × `InvariantPack`:实现 × 不变量 笛卡尔积逐格执行(机制,无具体不变量) |
 | `errors` | — | — | `CorespineError`(`code` + `retryable`)+ `error_to_dict`:任意异常 → 可序列化 dict |

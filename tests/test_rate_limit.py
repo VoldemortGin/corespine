@@ -234,6 +234,7 @@ def test_copy_copy_works_and_keeps_stream_bound_to_the_copy():
     assert type(dup) is RateLimitedProvider and isinstance(dup, StreamingLLMProvider)
     assert dup.stream_chat.__self__ is dup  # type: ignore[attr-defined]
     assert list(dup.stream_chat([{"role": "user", "content": "hi"}]))
+    assert dup._events is streaming._events and dup._lock is streaming._lock  # 与 main 一致:共享窗口
 
     plain = copy.copy(RateLimitedProvider(_FixedProvider(1), tokens_per_minute=10))
     assert isinstance(plain, LLMProvider) and not isinstance(plain, StreamingLLMProvider)

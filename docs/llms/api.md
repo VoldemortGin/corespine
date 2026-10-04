@@ -253,8 +253,12 @@ to_dict(self) -> dict[str, object]
 ### 内置子类
 
 ```python
-class ConfigError(CorespineError): code = "config.invalid"    # 配置非法(缺必填、类型不符等)
-class SeamError(CorespineError):   code = "seam.unknown"      # 缝相关错误(未知实现、工厂构造失败等)
+class ConfigError(CorespineError):
+    code = "config.invalid"  # 配置非法(缺必填、类型不符等)
+
+
+class SeamError(CorespineError):
+    code = "seam.unknown"  # 缝相关错误(未知实现、工厂构造失败等)
 ```
 
 > 注:`Registry.make` 的未知 spec 抛的是标准库 `ValueError`(非 `SeamError`);`load_from_env` 的缺失/

@@ -132,7 +132,7 @@ pack = (
 # 3) 绑成笛卡尔积,逐格跑
 suite = ConformanceSuite(impls, pack)
 for impl, invariant in suite.cases():
-    suite.check(impl, invariant)   # 失败即抛,定位到具体格子
+    suite.check(impl, invariant)  # 失败即抛,定位到具体格子
 # 或:suite.run() 收集全部结果(不抛);suite.passed() 便捷判全过
 ```
 
@@ -163,13 +163,14 @@ trace 缝(机制源码 [`observability/trace.py`](../src/corespine/observability
 ```python
 from corespine import InProcessPrivacyTraceSink, TraceError
 
+
 class PrivacyGatedTrace:
     def __init__(self) -> None:
         self._gate = InProcessPrivacyTraceSink()
 
     def emit_trace(self, code: str, **fields: object) -> None:
-        self._gate.emit(code, **fields)   # 命中 FORBIDDEN_KEYS 直接抛,不落下游
-        ...                               # 过闸后才落自家日志 / DB
+        self._gate.emit(code, **fields)  # 命中 FORBIDDEN_KEYS 直接抛,不落下游
+        ...  # 过闸后才落自家日志 / DB
 ```
 
 ### 形态 2:注入点(以 `TraceSink` 形参接收任意 sink)
@@ -179,6 +180,7 @@ class PrivacyGatedTrace:
 
 ```python
 from corespine import TraceSink
+
 
 def run_step(task: str, *, trace: TraceSink | None = None) -> str:
     output = do_work(task)
@@ -201,16 +203,19 @@ def run_step(task: str, *, trace: TraceSink | None = None) -> str:
 ```python
 from corespine import FORBIDDEN_KEYS, TraceError, lazy_extra_import
 
-class OTelTraceSink:                       # 在【你的包】里,不在 corespine 核心
+
+class OTelTraceSink:  # 在【你的包】里,不在 corespine 核心
     def __init__(self) -> None:
         # OTel SDK 经你自己的可选 extra 声明,延迟到真正构造时才 import。
         self._otel = lazy_extra_import("opentelemetry.trace", pkg="myadapter", extra="otel")
         ...
+
     def emit(self, code: str, **fields: object) -> None:
         offending = sorted(k for k in fields if k.strip().lower() in FORBIDDEN_KEYS)
-        if offending:                      # 导出 sink 自己也守隐私约定
+        if offending:  # 导出 sink 自己也守隐私约定
             raise TraceError(f"导出 sink 拒绝受限字段 {offending}")
-        ...                                # 建 span / 记 metric
+        ...  # 建 span / 记 metric
+
 
 # host 把它塞进形态 2 的注入点:run_step(task, trace=OTelTraceSink())
 ```

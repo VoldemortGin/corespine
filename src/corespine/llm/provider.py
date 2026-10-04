@@ -181,8 +181,12 @@ class MockProvider:
             completion_tokens=len(text),
             total_tokens=len(joined) + len(text),
         )
-        choice = Choice(index=0, message=ResponseMessage(role="assistant", content=text), finish_reason="stop")
-        return ChatCompletion(choices=(choice,), usage=usage, model=f"{self._prefix}", id=f"chatcmpl-{digest}")
+        choice = Choice(
+            index=0, message=ResponseMessage(role="assistant", content=text), finish_reason="stop"
+        )
+        return ChatCompletion(
+            choices=(choice,), usage=usage, model=f"{self._prefix}", id=f"chatcmpl-{digest}"
+        )
 
     def stream_chat(
         self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None

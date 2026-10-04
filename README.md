@@ -60,5 +60,5 @@ sink.emit("retrieve", count=3, took_ms=12)
 # 任务队列:同步内联执行
 q = FakeQueue()
 jid = q.enqueue(lambda p: {"doubled": p["n"] * 2}, {"n": 21})
-print(q.get(jid).result)                 # {'doubled': 42}
+print(q.get(jid).result)  # {'doubled': 42}
 ```

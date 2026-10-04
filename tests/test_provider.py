@@ -8,7 +8,10 @@ def _u(text: str) -> list[dict]:
 
 
 def test_mock_is_deterministic_for_same_input():
-    msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "中国内地FY2024的REVENUE是多少"}]
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "中国内地FY2024的REVENUE是多少"},
+    ]
     a = MockProvider().chat(msgs)
     b = MockProvider().chat(msgs)
     assert a == b  # 跨独立实例、同对话 -> 逐字一致
@@ -28,7 +31,9 @@ def test_output_is_openai_shaped():
 
 def test_different_input_yields_different_text():
     p = MockProvider()
-    assert p.chat(_u("Q1")).choices[0].message.content != p.chat(_u("Q2")).choices[0].message.content
+    assert (
+        p.chat(_u("Q1")).choices[0].message.content != p.chat(_u("Q2")).choices[0].message.content
+    )
     # system 消息也参与指纹:同 user 不同 system 也应不同。
     a = p.chat([{"role": "system", "content": "a"}, {"role": "user", "content": "Q"}])
     b = p.chat([{"role": "system", "content": "b"}, {"role": "user", "content": "Q"}])
@@ -37,13 +42,20 @@ def test_different_input_yields_different_text():
 
 def test_mock_never_fabricates_tool_calls():
     # 离线默认不假装会 function-calling:即便给了 tools 也不回 tool_calls。
-    out = MockProvider().chat(_u("用工具算 1+1"), tools=[{"type": "function", "function": {"name": "calc"}}])
+    out = MockProvider().chat(
+        _u("用工具算 1+1"), tools=[{"type": "function", "function": {"name": "calc"}}]
+    )
     assert out.choices[0].message.tool_calls is None
     assert out.choices[0].finish_reason == "stop"
 
 
 def test_prefix_is_configurable():
-    assert MockProvider(prefix="offline").chat(_u("hi")).choices[0].message.content.startswith("[offline:")
+    assert (
+        MockProvider(prefix="offline")
+        .chat(_u("hi"))
+        .choices[0]
+        .message.content.startswith("[offline:")
+    )
 
 
 def test_mock_satisfies_protocol():

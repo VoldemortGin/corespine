@@ -11,12 +11,12 @@ LLM 缝最近被重构为 **OpenAI chat-completions 形状**。旧的 `complete(
 
 ```python
 # ❌ 旧 API,已移除,会报错
-out = provider.complete("hello")            # AttributeError: ... has no attribute 'complete'
-from corespine import Completion            # ImportError: cannot import name 'Completion'
+out = provider.complete("hello")  # AttributeError: ... has no attribute 'complete'
+from corespine import Completion  # ImportError: cannot import name 'Completion'
 
 # ✅ 当前 API:chat(messages) -> ChatCompletion
 out = provider.chat([{"role": "user", "content": "hello"}])
-text = out.choices[0].message.content       # 取文本:choices[0].message.content
+text = out.choices[0].message.content  # 取文本:choices[0].message.content
 ```
 
 - 输入是 OpenAI 风格的 `messages: list[dict]`(`role` / `content` / 可带 `tool_calls` / `tool_call_id`),
@@ -36,12 +36,12 @@ text = out.choices[0].message.content       # 取文本:choices[0].message.conte
 # ❌ 携带正文字段 -> raise TraceError(code="trace.forbidden"),整条不记录
 sink.emit("answer.made", content="模型答案正文…")
 sink.emit("retrieve", text="chunk 正文…")
-sink.emit("score", value=0.97)              # 连 "value" 也被禁!
+sink.emit("score", value=0.97)  # 连 "value" 也被禁!
 
 # ✅ 只记非敏感元数据:code / 计数 / 耗时 / 布尔标志
 sink.emit("answer.made", char_count=128, took_ms=42)
 sink.emit("retrieve", count=3, hit=True)
-sink.emit("score", confidence_bucket="high")   # 换个不在禁词表的键名
+sink.emit("score", confidence_bucket="high")  # 换个不在禁词表的键名
 ```
 
 被禁的键(归一为小写后比对):`answer / body / chunk / chunk_text / completion / content / prompt /
@@ -54,9 +54,9 @@ text / value`。`"score"` 里含 "value" 子串不会误伤——比对的是**�
 
 ```python
 reg.register("In-Process", factory)
-reg.make("in_process")    # ✅ 命中:"In-Process" 与 "in_process" 归一到同一个键
-reg.make("  IN PROCESS ") # ✅ 命中:同上
-reg.make("inProcess")     # ❌ 不命中:驼峰里没有分隔符,归一后是 "inprocess" ≠ "in_process"
+reg.make("in_process")  # ✅ 命中:"In-Process" 与 "in_process" 归一到同一个键
+reg.make("  IN PROCESS ")  # ✅ 命中:同上
+reg.make("inProcess")  # ❌ 不命中:驼峰里没有分隔符,归一后是 "inprocess" ≠ "in_process"
 ```
 
 - 同名重复 `register` 后者覆盖前者。
@@ -74,8 +74,11 @@ corespine 里**——由各 app 在自己的缝里声明可选 extra 并**延迟
 # ✅ adapter 工厂里延迟 import:只在真正构造该 adapter 时才 import,缺依赖给友好提示
 from corespine import lazy_extra_import
 
+
 def make_redis_queue(**kwargs):
-    redis = lazy_extra_import("redis", pkg="myadapter", extra="redis")  # 缺 redis -> 友好 ImportError
+    redis = lazy_extra_import(
+        "redis", pkg="myadapter", extra="redis"
+    )  # 缺 redis -> 友好 ImportError
     return RedisQueue(redis.Redis(**kwargs))
 ```
 

@@ -172,9 +172,7 @@ def _make_schedule(
     start_at: float | None = None,
 ) -> ScheduleTrigger:
     """schedule 工厂:要求显式 interval_s 与注入时钟 now_fn(离线默认不猜真实墙钟)。"""
-    return ScheduleTrigger(
-        interval_s=interval_s, now_fn=now_fn, trigger=trigger, start_at=start_at
-    )
+    return ScheduleTrigger(interval_s=interval_s, now_fn=now_fn, trigger=trigger, start_at=start_at)
 
 
 # trigger 缝的注册表:内置 manual / schedule;真实信号源(webhook / 消息队列 / 文件监听等)

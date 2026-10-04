@@ -220,3 +220,33 @@ def test_exporter_failure_count_never_holds_content():
     sink.emit("evt", count=1)
     assert isinstance(sink.exporter_failures, int)
     assert all("SECRET-in-error" not in repr(e) for e in sink.events)
+
+
+# --- 内存型 sink / exporter 的可选容量上限(缺省不限) --------------------------------------
+
+
+def test_in_memory_sink_and_exporter_default_unbounded():
+    exporter = InProcessTraceExporter()
+    sink = InProcessPrivacyTraceSink(exporters=[exporter])
+    for i in range(300):
+        sink.emit("e", n=i)
+    assert len(sink.events) == 300 and len(exporter.events) == 300
+
+
+def test_in_memory_sink_and_exporter_max_events_keeps_latest():
+    exporter = InProcessTraceExporter(max_events=3)
+    sink = InProcessPrivacyTraceSink(exporters=[exporter], max_events=5)
+    for i in range(10):
+        sink.emit("e", n=i)
+    assert [e.fields["n"] for e in sink.events] == [5, 6, 7, 8, 9]
+    assert [e.fields["n"] for e in exporter.events] == [7, 8, 9]
+    assert sink.codes() == ["e"] * 5
+    assert sink.dropped_events == 5 and exporter.dropped_events == 7
+
+
+def test_max_events_validation():
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            InProcessPrivacyTraceSink(max_events=bad)
+        with pytest.raises(ValueError):
+            InProcessTraceExporter(max_events=bad)

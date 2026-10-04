@@ -186,3 +186,72 @@ def test_run_does_not_swallow_keyboard_interrupt_or_pytest_exit():
         suite = ConformanceSuite({"d": DictStore}, _pack_of(a=fn))
         with pytest.raises(exc_type):
             suite.run()
+
+
+# --- _classify:按类的 __module__ 核对身份,不被同名假类冒充 --------------------------------
+
+
+def _run_one(check):
+    return ConformanceSuite({"d": DictStore}, _pack_of(a=check)).run()[0]
+
+
+def test_real_unittest_and_pytest_outcomes_are_classified():
+    import unittest
+
+    def real_unittest_skip(_):
+        raise unittest.SkipTest("x")
+
+    assert _run_one(real_unittest_skip).skipped is True
+    assert _run_one(lambda _: pytest.skip("x")).skipped is True
+    failed = _run_one(lambda _: pytest.fail("x"))
+    assert failed.passed is False and failed.skipped is False
+
+
+def test_same_named_fake_skip_classes_are_not_treated_as_skip():
+    class SkipTest(Exception):  # 同名假类:模块是本测试文件,不是 unittest
+        pass
+
+    def raise_fake(_):
+        raise SkipTest("假的")
+
+    result = _run_one(raise_fake)
+    assert result.skipped is False and result.passed is False  # 按普通失败记录
+
+    class OutcomeException(BaseException):  # 假的 pytest outcome 基类
+        pass
+
+    class Skipped(OutcomeException):
+        pass
+
+    class Failed(OutcomeException):
+        pass
+
+    for fake in (Skipped, Failed):
+
+        def raise_it(_, fake=fake):
+            raise fake("假的")
+
+        with pytest.raises(fake):  # 认不出来 -> 当作「有意中止」原样外抛,不当 skip / fail 吞掉
+            _run_one(raise_it)
+
+
+def test_pytest_xfail_is_recorded_as_failed_not_green():
+    result = _run_one(lambda _: pytest.xfail("预期失败"))
+    assert result.passed is False and result.skipped is False
+    assert result.error is not None and "XFailed" in result.error
+
+
+def test_pytest_exit_still_propagates():
+    with pytest.raises(BaseException) as ei:
+        _run_one(lambda _: pytest.exit("stop"))
+    assert type(ei.value).__name__ == "Exit"
+
+
+def test_all_skipped_or_any_skipped_is_not_passed():
+    all_skipped = ConformanceSuite({"d": DictStore}, _pack_of(a=lambda _: pytest.skip("x")))
+    assert all_skipped.passed() is False
+    mixed = ConformanceSuite(
+        {"d": DictStore}, _pack_of(a=lambda _: None, b=lambda _: pytest.skip("x"))
+    )
+    assert [r.passed for r in mixed.run()] == [True, False]
+    assert mixed.passed() is False

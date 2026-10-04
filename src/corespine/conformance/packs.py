@@ -101,6 +101,9 @@ def _queue_dotted_path_func(queue: TaskQueue) -> None:
     assert status is not None and status.result == {"doubled": 10}
 
 
+# 适用范围:要求 enqueue 后【同步内联执行】(get 立即得到终态)、job 在【当前进程】内执行(用了闭包
+# job 并读取其副作用)。FakeQueue 等同步实现可绑;异步后端(如 RQ:worker 在别的进程、get 先给
+# queued)满足不了这些不变量,不要直接绑——请自写等待终态的不变量包。
 QUEUE_PACK: InvariantPack[TaskQueue] = (
     InvariantPack("task_queue")
     .add("runs_job_and_records_result", _queue_runs_job_and_records_result)

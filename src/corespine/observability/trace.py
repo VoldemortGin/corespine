@@ -24,6 +24,7 @@ import functools
 import types
 import unicodedata
 import uuid
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePath
@@ -332,22 +333,39 @@ class TraceExporter(Protocol):
     def export(self, event: TraceEvent) -> None: ...
 
 
+def _check_max_events(max_events: int | None) -> int | None:
+    if max_events is not None and max_events < 1:
+        raise ValueError(f"max_events 必须 >= 1(或 None 表示不限):{max_events!r}")
+    return max_events
+
+
 class InProcessTraceExporter:
     """进程内默认 TraceExporter:把扇出到的事件收集进内存列表(离线 / 测试用)。
 
     是「核心只带进程内收集器默认」的兑现:真实 OTel / Langfuse 导出走各 app 的可选 extra,
     core 只给一个零依赖、可自检的收集器。它只可能收到已过隐私校验的事件(见 TraceExporter)。
+
+    缺省【无界】累积(与此前一致);**长驻服务应设置 `max_events`**:超出后丢弃最旧的事件
+    (保留最新的 max_events 条,丢弃数见 `dropped_events`),否则内存随事件数无限增长。
     """
 
-    def __init__(self) -> None:
-        self._events: list[TraceEvent] = []
+    def __init__(self, *, max_events: int | None = None) -> None:
+        self._events: deque[TraceEvent] = deque(maxlen=_check_max_events(max_events))
+        self._dropped = 0
 
     @property
     def events(self) -> list[TraceEvent]:
         """已导出事件的只读视图(返回副本,外部改动不污染内部状态)。"""
         return list(self._events)
 
+    @property
+    def dropped_events(self) -> int:
+        """因 max_events 上限被丢弃的最旧事件累计数(缺省不限则恒为 0)。"""
+        return self._dropped
+
     def export(self, event: TraceEvent) -> None:
+        if self._events.maxlen is not None and len(self._events) == self._events.maxlen:
+            self._dropped += 1
         self._events.append(event)
 
 
@@ -359,12 +377,23 @@ class InProcessPrivacyTraceSink:
 
     可挂 0..N 个 TraceExporter 做扇出:扇出严格发生在隐私校验【之后】——受限载荷在校验阶段
     就被挡下,一条都到不了 exporter。故导出面与本地记录面等宽,隐私不变量不因扇出而放松。
+
+    缺省本地记录【无界】累积(与此前一致);**长驻服务应设置 `max_events`**:超出后丢弃最旧的
+    事件(保留最新 max_events 条,丢弃数见 `dropped_events`),否则内存随事件数无限增长。
     """
 
-    def __init__(self, *, exporters: Sequence[TraceExporter] | None = None) -> None:
-        self._events: list[TraceEvent] = []
+    def __init__(
+        self, *, exporters: Sequence[TraceExporter] | None = None, max_events: int | None = None
+    ) -> None:
+        self._events: deque[TraceEvent] = deque(maxlen=_check_max_events(max_events))
+        self._dropped = 0
         self._exporters: list[TraceExporter] = list(exporters) if exporters else []
         self._exporter_failures = 0
+
+    @property
+    def dropped_events(self) -> int:
+        """因 max_events 上限被丢弃的最旧事件累计数(缺省不限则恒为 0)。"""
+        return self._dropped
 
     @property
     def exporter_failures(self) -> int:
@@ -393,6 +422,8 @@ class InProcessPrivacyTraceSink:
         # 单次扫描同时完成校验与取独立拷贝(含容器时才递归 / 深拷贝;全标量的扁平事件走快路径)。
         snapshot, flat = _sanitize(fields)
         event = TraceEvent(code=code, fields=snapshot)  # TraceEvent 构造时再浅拷贝一层
+        if self._events.maxlen is not None and len(self._events) == self._events.maxlen:
+            self._dropped += 1
         self._events.append(event)
         for exporter in self._exporters:
             # 每个 exporter 拿独立拷贝:互不影响,也碰不到本地记录;单个 exporter 故障

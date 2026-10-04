@@ -285,7 +285,7 @@ CaseResult(impl: str, invariant: str, passed: bool, error: str | None = None, sk
 | 常量 | 适用的实现 | 内容 |
 |---|---|---|
 | `TRACE_PRIVACY_PACK: InvariantPack[TraceSink]` | 任意 `TraceSink` | 顶层 / 嵌套禁词键被拒、不可检查对象被拒、合法元数据放行 |
-| `QUEUE_PACK: InvariantPack[TaskQueue]` | 任意 `TaskQueue` | 同步执行记结果、失败入状态不外抛、显式 job_id 幂等、未知 id 为 None、点路径 func |
+| `QUEUE_PACK: InvariantPack[TaskQueue]` | 【同步内联执行】的 `TaskQueue`(如 `FakeQueue`;异步后端如 RQ 不适用:要求 enqueue 后 `get` 立即终态、闭包 job 在当前进程跑) | 同步执行记结果、失败入状态不外抛、显式 job_id 幂等、未知 id 为 None、点路径 func |
 | `LLM_PROVIDER_PACK: InvariantPack[LLMProvider]` | 任意 `LLMProvider` | OpenAI 形状、usage 自洽、不改写入参 |
 | `STREAMING_PROVIDER_PACK: InvariantPack[StreamingLLMProvider]` | 【确定性】流式 provider | 末块有 finish_reason、流式拼接 == 非流式 |
 

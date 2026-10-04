@@ -27,6 +27,7 @@ ScheduleTrigger 每个时刻窗口(tick)只发一次,同一时刻重复 poll 不
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -51,6 +52,16 @@ def _event_id(trigger: str, *parts: object) -> str:
     id 互异(唯一)。用 sha256 十六进制前 16 位——够低碰撞,又短便于 grep / 落库。
     """
     raw = ":".join([trigger, *(str(p) for p in parts)])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _namespaced_event_id(trigger: str, namespace: str, seq: int) -> str:
+    """带 namespace 的 ManualTrigger 事件 id:各部件经 JSON 编码(自带转义)后再哈希,
+    故 (trigger, namespace) 的任何拆分方式都不会撞(`trigger="manual:x"` 与 `namespace="x"` 不同)。
+
+    哈希输入以 `["ns",` 起、以 `]` 收尾,而缺省 id 的输入恒以 `:<序号>` 收尾,二者不会互撞。
+    """
+    raw = json.dumps(["ns", trigger, namespace, seq], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -90,8 +101,9 @@ class ManualTrigger:
     每次 fire 用单调递增的序号派生事件 id——同一发火序列可重放(id 序列稳定),【同一实例内】
     不同 fire 互异(即便 payload 相同)。id 只由 (trigger, namespace, 序号) 决定,故【跨实例 /
     重启后序号从 0 重来会得到相同 id】——这是离线确定性(可重放)的代价,不是「全局唯一」。
-    需要跨实例 / 重启不撞时,给每个实例传不同的 `namespace`(如实例名 / 租户名);缺省空
-    namespace 的 id 与此前完全一致。repr 只暴露 pending 计数,绝不暴露任何 payload。
+    需要跨实例 / 重启不撞时,给每个实例传不同的 `namespace`(如实例名 / 租户名);带 namespace 的
+    id 对各部件做了无歧义编码(`trigger="manual:x"` 与 `namespace="x"` 不撞);缺省空 namespace
+    的 id 与 main 逐字节一致。repr 只暴露 pending 计数,绝不暴露任何 payload。
     """
 
     def __init__(self, *, trigger: str = TRIGGER_MANUAL, namespace: str = "") -> None:
@@ -104,8 +116,10 @@ class ManualTrigger:
         """入队一个事件并返回它;下次 poll 会把它(及此后入队的)一并取出。"""
         event = TriggerEvent(
             trigger=self._trigger,
-            id=_event_id(
-                self._trigger, *((self._namespace,) if self._namespace else ()), self._seq
+            id=(
+                _namespaced_event_id(self._trigger, self._namespace, self._seq)
+                if self._namespace
+                else _event_id(self._trigger, self._seq)
             ),
             payload=dict(payload or {}),
             at=at,

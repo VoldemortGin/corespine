@@ -30,20 +30,31 @@ Invariant = Callable[[T], None]
 Factory = Callable[[], T]
 
 
+def _is_pytest_module(module: str) -> bool:
+    return module in ("pytest", "_pytest") or module.startswith(("pytest.", "_pytest."))
+
+
 def _classify(exc: BaseException) -> str | None:
     """run() 该如何对待这个异常:"failed" / "skipped" 收集进结果;None 表示原样外抛。
 
-    pytest 把 Failed / Skipped / Exit 的 `__module__` 改写成 "builtins",故不能按模块名判断,
-    只能按类名 + MRO 识别(不 import pytest)。
+    pytest 把 Failed / Skipped 的 `__module__` 改写成 "builtins",故类名之外还要核对其基类
+    `OutcomeException` 确实来自 pytest(`pytest` / `_pytest.` 模块)——任何同名的假类(自己定义的
+    `SkipTest` / `Skipped` / `Failed` ...)都不会被当成 skip / fail。不 import pytest / unittest。
+
+    - pytest.skip(`Skipped`)与 unittest 的 `SkipTest`(模块 `unittest.` 前缀):skipped;
+    - pytest.fail(`Failed`):failed;`pytest.xfail`(`XFailed`,是 `Failed` 子类)同样记为 failed——
+      一个在 conformance 里主动 xfail 的不变量没有验证通过,不能算绿;
+    - pytest.exit(`Exit`)与认不出来的 BaseException(含假的 outcome 类):None,原样外抛。
     """
-    names = [c.__name__ for c in type(exc).__mro__]
-    if "OutcomeException" in names:  # pytest.fail / pytest.skip 等(BaseException 子类)
+    mro = type(exc).__mro__
+    names = [c.__name__ for c in mro]
+    if any(c.__name__ == "OutcomeException" and _is_pytest_module(c.__module__) for c in mro):
         if "Skipped" in names:
             return "skipped"
         return "failed" if "Failed" in names else None
-    if type(exc).__name__ == "Exit" and type(exc).__module__ in ("builtins", "_pytest.outcomes"):
+    if type(exc).__name__ == "Exit" and _is_pytest_module(type(exc).__module__):
         return None  # pytest.exit:有意中止整个会话
-    if "SkipTest" in names:  # unittest.SkipTest
+    if any(c.__name__ == "SkipTest" and c.__module__.startswith("unittest") for c in mro):
         return "skipped"
     return "failed" if isinstance(exc, Exception) else None
 
@@ -137,10 +148,11 @@ class ConformanceSuite[T]:
     def run(self) -> list[CaseResult]:
         """跑全部格子并收集结果(不因单格失败而中断;用于离线自检 / 报告)。
 
-        捕获范围:`Exception`(含 AssertionError),以及 pytest 的 `Failed`(pytest.fail,
+        捕获范围:`Exception`(含 AssertionError),以及 pytest 的 `Failed`(pytest.fail / pytest.xfail,
         记为失败)与 `Skipped`(pytest.skip / unittest.SkipTest,记为 skipped、passed=False)——
-        前两者继承 BaseException,否则会中断整轮。本模块不 import pytest,按异常类名识别。
-        `KeyboardInterrupt` / `SystemExit` / `pytest.exit`(Exit)等「有意中止」一律原样外抛。
+        前两者继承 BaseException,否则会中断整轮。本模块不 import pytest,按类名 + 模块识别
+        (见 `_classify`)。`KeyboardInterrupt` / `SystemExit` / `pytest.exit`(Exit)等「有意中止」
+        一律原样外抛。
         """
         results: list[CaseResult] = []
         for impl, inv in self.cases():
@@ -159,5 +171,11 @@ class ConformanceSuite[T]:
         return results
 
     def passed(self) -> bool:
-        """便捷:全部格子是否通过(离线自检用)。"""
+        """便捷:全部格子是否通过(离线自检用)。
+
+        【跳过不算通过】任一格子失败或被 skip(`CaseResult.skipped`)都返回 False——全是 skip
+        的套件什么也没验证,与「空 pack 不得静默全绿」同一原则。(main 上不变量里的 pytest.skip
+        会从本方法透传出去、让调用方的测试变成 skipped;现在改为记录并返回 False。)想容忍
+        skip 的调用方自己遍历 `run()`,按 `skipped` 过滤。
+        """
         return all(result.passed for result in self.run())

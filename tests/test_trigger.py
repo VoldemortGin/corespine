@@ -513,3 +513,45 @@ def test_manual_ids_default_unchanged_and_namespace_disambiguates():
 def test_manual_namespace_via_registry():
     t = make_trigger("manual", namespace="x")
     assert t.fire().id != ManualTrigger().fire().id  # type: ignore[attr-defined]
+
+
+# --- ManualTrigger id 不撞:trigger 与 namespace 的拼接无歧义 -------------------------------
+
+
+def test_manual_default_id_is_byte_identical_to_main():
+    # main 的缺省 id = sha256("manual:0")[:16];逐字节不变。
+    assert ManualTrigger().fire().id == "3e0c11a26341fee7"
+    assert ManualTrigger(trigger="a:b").fire().id == _legacy_id("a:b:0")
+
+
+def _legacy_id(raw: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def test_manual_trigger_and_namespace_with_colons_do_not_collide():
+    a = ManualTrigger(trigger="manual:x").fire().id
+    b = ManualTrigger(namespace="x").fire().id
+    assert a != b
+    combos = [
+        ("manual", ""),
+        ("manual:x", ""),
+        ("manual", "x"),
+        ("manual:x", "y"),
+        ("manual", "x:y"),
+        ("manual:x", "y:z"),
+        ("manual", "x:y:0"),
+        ("manual:x:y", "0"),
+        ("", "manual"),
+    ]
+    ids = {ManualTrigger(trigger=t, namespace=n).fire().id for t, n in combos}
+    assert len(ids) == len(combos)
+    # 带 namespace 的 id 也不会等于任何缺省 id(缺省 id 恒为 sha256(trigger + ":" + 序号))。
+    assert ManualTrigger(trigger="manual", namespace="x").fire().id != _legacy_id("manual:x:0")
+
+
+def test_manual_namespace_ids_are_deterministic_and_sequenced():
+    one, two = ManualTrigger(namespace="n"), ManualTrigger(namespace="n")
+    assert [one.fire().id for _ in range(3)] == [two.fire().id for _ in range(3)]
+    assert len({e.id for e in [ManualTrigger(namespace="n").fire()]}) == 1

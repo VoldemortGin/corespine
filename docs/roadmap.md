@@ -28,8 +28,10 @@
 
 ## 现状基线(2026-09)
 
-九条缝 + errors 缝均已落地,各带离线确定性默认 + 参数化 conformance,测试全绿、import-clean、
-`dependencies` 为空:`seam/registry` · `observability/trace` · `llm/provider` ·
+九条缝 + errors 缝均已落地,各带离线确定性默认,测试全绿、import-clean、`dependencies` 为空。
+参数化 conformance 的实际覆盖(如实):queue / trace(隐私)/ llm(含流式)的可复用
+`InvariantPack` 在 `conformance/packs.py`(下游可一行绑定);blob / credential / trigger 的契约包
+在各自测试里绑定(尚未上提);registry / config / errors 以专测覆盖,无 InvariantPack。缝清单:`seam/registry` · `observability/trace` · `llm/provider` ·
 `config/env` · `queue/task_queue` · `blob/store` · `credential/store` · `trigger/source` ·
 `conformance/harness`,以及 `errors`(统一异常基类 `CorespineError`)。下文方向均以此为基线。
 

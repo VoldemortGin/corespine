@@ -30,17 +30,39 @@ Invariant = Callable[[T], None]
 Factory = Callable[[], T]
 
 
+def _classify(exc: BaseException) -> str | None:
+    """run() 该如何对待这个异常:"failed" / "skipped" 收集进结果;None 表示原样外抛。
+
+    pytest 把 Failed / Skipped / Exit 的 `__module__` 改写成 "builtins",故不能按模块名判断,
+    只能按类名 + MRO 识别(不 import pytest)。
+    """
+    names = [c.__name__ for c in type(exc).__mro__]
+    if "OutcomeException" in names:  # pytest.fail / pytest.skip 等(BaseException 子类)
+        if "Skipped" in names:
+            return "skipped"
+        return "failed" if "Failed" in names else None
+    if type(exc).__name__ == "Exit" and type(exc).__module__ in ("builtins", "_pytest.outcomes"):
+        return None  # pytest.exit:有意中止整个会话
+    if "SkipTest" in names:  # unittest.SkipTest
+        return "skipped"
+    return "failed" if isinstance(exc, Exception) else None
+
+
 @dataclass(frozen=True)
 class InvariantPack[T]:
     """一组具名不变量。app 用它装自己的保证;harness 只负责跑。
 
     add() 返回自身,便于链式登记:InvariantPack("x").add(...).add(...)。
+    同名不变量重复登记抛 ValueError(静默覆盖会让一条保证悄悄消失);空包不能喂给
+    ConformanceSuite(0 个格子会静默全绿)。
     """
 
     name: str
     invariants: dict[str, Invariant[T]] = field(default_factory=dict)
 
     def add(self, name: str, check: Invariant[T]) -> InvariantPack[T]:
+        if name in self.invariants:
+            raise ValueError(f"InvariantPack {self.name!r} 已有同名不变量 {name!r}")
         self.invariants[name] = check
         return self
 
@@ -56,6 +78,8 @@ class CaseResult:
     invariant: str
     passed: bool
     error: str | None = None
+    # 不变量内部 pytest.skip():既没通过也没失败。passed 为 False(不静默算绿),由本字段区分。
+    skipped: bool = False
 
 
 class ConformanceSuite[T]:
@@ -64,6 +88,10 @@ class ConformanceSuite[T]:
     def __init__(self, implementations: dict[str, Factory[T]], pack: InvariantPack[T]) -> None:
         if not implementations:
             raise ValueError("conformance 套件至少需要一个实现")
+        if not pack.invariants:
+            raise ValueError(
+                f"InvariantPack {pack.name!r} 没有任何不变量:空包会让套件静默全绿(0 个格子)"
+            )
         self._impls = dict(implementations)
         self._pack = pack
 
@@ -72,8 +100,8 @@ class ConformanceSuite[T]:
         return [(impl, inv) for impl in self._impls for inv in self._pack.names()]
 
     def ids(self) -> list[str]:
-        """与 cases() 对齐的可读用例 id(形如 impl/invariant)。"""
-        return [f"{impl}/{inv}" for impl, inv in self.cases()]
+        """与 cases() 对齐的可读用例 id(形如 impl-invariant,与 parametrize_kwargs 的 ids 一致)。"""
+        return [f"{impl}-{inv}" for impl, inv in self.cases()]
 
     def parametrize_kwargs(self) -> dict[str, object]:
         """产出可直接喂给 pytest.mark.parametrize(**...) 的 kwargs(pytest-free)。
@@ -96,8 +124,7 @@ class ConformanceSuite[T]:
         argvalues: list[Callable[[], None]] = [
             partial(self.check, impl, inv) for impl, inv in self.cases()
         ]
-        ids = [f"{impl}-{inv}" for impl, inv in self.cases()]
-        return {"argnames": "case", "argvalues": argvalues, "ids": ids}
+        return {"argnames": "case", "argvalues": argvalues, "ids": self.ids()}
 
     def check(self, impl: str, invariant: str) -> None:
         """跑单个格子:新建该实现实例,对其执行该不变量(失败则原样抛出)。
@@ -108,14 +135,27 @@ class ConformanceSuite[T]:
         self._pack.invariants[invariant](instance)
 
     def run(self) -> list[CaseResult]:
-        """跑全部格子并收集结果(不抛;用于离线自检 / 报告)。"""
+        """跑全部格子并收集结果(不因单格失败而中断;用于离线自检 / 报告)。
+
+        捕获范围:`Exception`(含 AssertionError),以及 pytest 的 `Failed`(pytest.fail,
+        记为失败)与 `Skipped`(pytest.skip / unittest.SkipTest,记为 skipped、passed=False)——
+        前两者继承 BaseException,否则会中断整轮。本模块不 import pytest,按异常类名识别。
+        `KeyboardInterrupt` / `SystemExit` / `pytest.exit`(Exit)等「有意中止」一律原样外抛。
+        """
         results: list[CaseResult] = []
         for impl, inv in self.cases():
             try:
                 self.check(impl, inv)
                 results.append(CaseResult(impl, inv, True))
-            except Exception as exc:  # noqa: BLE001 — 收集失败,不中断其余格子
-                results.append(CaseResult(impl, inv, False, f"{type(exc).__name__}: {exc}"))
+            except BaseException as exc:  # noqa: BLE001 — 收集失败,不中断其余格子
+                kind = _classify(exc)
+                if kind is None:
+                    raise
+                results.append(
+                    CaseResult(
+                        impl, inv, False, f"{type(exc).__name__}: {exc}", skipped=kind == "skipped"
+                    )
+                )
         return results
 
     def passed(self) -> bool:

@@ -119,3 +119,70 @@ def test_fresh_instance_per_case_no_state_bleed():
 def test_empty_suite_rejected():
     with pytest.raises(ValueError):
         ConformanceSuite({}, PACK)
+
+
+# --- 空转 / 重名 / id 一致 / pytest 结果处理 --------------------------------------------
+
+
+def test_empty_pack_rejected_instead_of_silent_green():
+    with pytest.raises(ValueError):
+        ConformanceSuite({"dict": DictStore}, InvariantPack("empty"))
+
+
+def test_duplicate_invariant_name_rejected():
+    pack = InvariantPack("p").add("same", lambda x: None)
+    with pytest.raises(ValueError):
+        pack.add("same", lambda x: None)
+    assert pack.names() == ["same"]
+
+
+def test_ids_and_parametrize_kwargs_ids_are_identical():
+    kw = SUITE.parametrize_kwargs()
+    assert SUITE.ids() == kw["ids"]
+    assert all("-" in i and "/" not in i for i in SUITE.ids())
+
+
+def _pack_of(**checks):
+    pack = InvariantPack("t")
+    for name, fn in checks.items():
+        pack.add(name, fn)
+    return pack
+
+
+def test_run_records_pytest_fail_and_continues():
+    def uses_pytest_fail(_):
+        pytest.fail("故意失败")
+
+    def fine(_):
+        return None
+
+    suite = ConformanceSuite({"d": DictStore}, _pack_of(a=uses_pytest_fail, b=fine))
+    results = {r.invariant: r for r in suite.run()}
+    assert results["a"].passed is False and "故意失败" in (results["a"].error or "")
+    assert results["b"].passed is True  # 没被中断
+    assert suite.passed() is False
+
+
+def test_run_records_pytest_skip_as_skipped_not_green():
+    def uses_skip(_):
+        pytest.skip("不适用")
+
+    suite = ConformanceSuite({"d": DictStore}, _pack_of(a=uses_skip))
+    (result,) = suite.run()
+    assert result.skipped is True and result.passed is False
+    assert suite.passed() is False  # 跳过不算通过:不静默全绿
+
+
+def test_run_does_not_swallow_keyboard_interrupt_or_pytest_exit():
+    from _pytest.outcomes import Exit
+
+    def interrupt(_):
+        raise KeyboardInterrupt
+
+    def hard_exit(_):
+        pytest.exit("stop", returncode=3)
+
+    for fn, exc_type in ((interrupt, KeyboardInterrupt), (hard_exit, Exit)):
+        suite = ConformanceSuite({"d": DictStore}, _pack_of(a=fn))
+        with pytest.raises(exc_type):
+            suite.run()

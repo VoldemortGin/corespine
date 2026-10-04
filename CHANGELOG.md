@@ -24,6 +24,18 @@
   - `init=False` 字段不再读 env(原先有对应 env 时 `TypeError`);
   - `env_key("", "x")` 现为 `X`(原为 `_X`);非空前缀的行为不变。
 
+- **conformance 基座收紧**:
+  - `ConformanceSuite` 拿到**空 `InvariantPack`** 现抛 `ValueError`(原先 0 个用例、`passed()`
+    静默为 True);`InvariantPack.add` **同名重复登记**现抛 `ValueError`(原先静默覆盖)。
+  - `ConformanceSuite.ids()` 由 `impl/invariant` 改为 `impl-invariant`,与 `parametrize_kwargs()`
+    的 ids 一致(下游参数化测试用的就是后者,其 id 不变)。
+  - `run()` 现把 `pytest.fail` 记为失败、`pytest.skip` / `unittest.SkipTest` 记为 skipped
+    (`CaseResult.skipped=True`、`passed=False`,故 `passed()` 不会把跳过当通过),不再中断整轮;
+    `KeyboardInterrupt` / `SystemExit` / `pytest.exit` 仍原样外抛。`CaseResult` 新增有缺省值的
+    `skipped` 字段。
+  - 新增 `corespine.conformance.packs`:`QUEUE_PACK` / `LLM_PROVIDER_PACK` /
+    `STREAMING_PROVIDER_PACK`(与既有 `TRACE_PRIVACY_PACK` 并列)。
+
 ### 新增 / 修复(按提交顺序追加)
 
 - 递归 trace 隐私门 `enforce_trace_privacy`(ADR 0006),`MAX_TRACE_DEPTH` / `MAX_TRACE_NODES`,
